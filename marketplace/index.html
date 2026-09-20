@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Marketplace oficial y gratuita de extensiones para AxiomCode">
+<title>AxiomCode Marketplace</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="./"><span>A</span>AxiomCode Marketplace</a>
+  <nav class="top-nav"><a href="#editor">Editor</a><a href="#extensions">Extensiones</a><a href="#publish">Publicar</a><a class="github" href="https://github.com/Tylerpro09/AxiomCode">GitHub</a></nav>
+</header>
+<main>
+<section class="hero">
+  <div>
+    <p class="eyebrow">MARKETPLACE OFICIAL</p>
+    <h1>Extiende AxiomCode.</h1>
+    <p>Descubre extensiones o publica la tuya usando solamente la URL de un repositorio público de GitHub.</p>
+  </div>
+  <div class="online"><i></i><span id="catalogState">Cargando catálogo…</span></div>
+</section>
+<section class="editor-release" id="editor">
+  <div class="section-head"><div><p class="eyebrow">AXIOMCODE EDITOR</p><h2>Descarga la última versión</h2><p>Los instaladores oficiales se publican en GitHub Releases.</p></div><span id="releaseState" class="release-state">Consultando GitHub…</span></div>
+  <div id="releaseCard" class="release-card"><div class="empty">Buscando la última release…</div></div>
+</section>
+<section class="browse" id="extensions">
+  <div class="section-head">
+    <div><h2>Extensiones</h2><p>Catálogo público de AxiomCode.</p></div>
+    <label class="search"><span>⌕</span><input id="search" placeholder="Buscar extensiones"></label>
+  </div>
+  <div id="extensionGrid" class="grid"><div class="empty">Cargando…</div></div>
+</section>
+<section class="publish" id="publish">
+  <div class="publish-copy">
+    <p class="eyebrow">PUBLICAR GRATIS</p>
+    <h2>Pega la URL de tu repositorio</h2>
+    <p>Tu repositorio debe ser público y tener <code>extension.json</code> en la raíz. Revisamos el manifiesto antes de crear la solicitud de publicación.</p>
+    <ol>
+      <li>Repositorio público GitHub</li>
+      <li><code>extension.json</code> válido</li>
+      <li>Revisión del mantenedor</li>
+      <li>Publicación automática en el catálogo</li>
+    </ol>
+  </div>
+  <form id="publishForm" class="submit-card">
+    <label for="repoUrl">URL del repositorio</label>
+    <div class="repo-row">
+      <input id="repoUrl" type="url" required placeholder="https://github.com/usuario/mi-extension">
+      <button type="submit">Analizar</button>
+    </div>
+    <p id="repoMessage" class="message"></p>
+    <div id="preview" class="preview hidden"></div>
+    <button id="submitExtension" class="primary hidden" type="button">Enviar para publicar</button>
+    <small>Render valida y publica el repositorio. No necesitas subir ZIP ni configurar hosting.</small>
+  </form>
+</section>
+</main>
+<footer><span>AxiomCode Marketplace</span><span>Marketplace y API en Render · Datos en Supabase · Editor en GitHub Releases</span></footer>
+<script src="config.js"></script><script src="app.js"></script>
+</body>
+</html>
