@@ -10,7 +10,9 @@ const GITHUB_OWNER=process.env.GITHUB_OWNER||'Tylerpro09';
 const GITHUB_REPO=process.env.GITHUB_REPO||'AxiomCode';
 const GITHUB_TOKEN=process.env.GITHUB_TOKEN||'';
 const SUPABASE_URL=String(process.env.SUPABASE_URL||'').replace(/\/$/,'');
-const SUPABASE_SERVICE_ROLE_KEY=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
+const SUPABASE_SECRET_KEY=process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY||'';
+const SUPABASE_PUBLISHABLE_KEY=process.env.SUPABASE_PUBLISHABLE_KEY||'';
+const SUPABASE_JWKS_URL=process.env.SUPABASE_JWKS_URL||'';
 const SITE_ORIGIN=process.env.SITE_ORIGIN||'*';
 const WEB_ROOT=path.resolve(__dirname,'../marketplace');
 const MAX_BODY=64*1024;
@@ -129,14 +131,14 @@ async function inspectRepository(repoUrl,{includeFiles=false}={}){
   result.totalBytes=total;
   return result;
 }
+function supabaseConfig(){return {url:SUPABASE_URL,secretConfigured:Boolean(SUPABASE_SECRET_KEY),publishableConfigured:Boolean(SUPABASE_PUBLISHABLE_KEY),jwksUrl:SUPABASE_JWKS_URL||null};}
 function requireSupabase(){
-  if(!SUPABASE_URL||!SUPABASE_SERVICE_ROLE_KEY)throw Error('Supabase no está configurado en Render');
+  if(!SUPABASE_URL||!SUPABASE_SECRET_KEY)throw Error('Supabase no está configurado en Render');
 }
 async function sb(endpoint,options={}){
   requireSupabase();
   const headers={
-    apikey:SUPABASE_SERVICE_ROLE_KEY,
-    Authorization:'Bearer '+SUPABASE_SERVICE_ROLE_KEY,
+    apikey:SUPABASE_SECRET_KEY,
     Accept:'application/json',
     ...options.headers
   };
@@ -268,7 +270,7 @@ async function handler(req,res){
   if(req.method==='OPTIONS')return cors(res);
   const u=new URL(req.url,'http://localhost');
   try{
-    if(req.method==='GET'&&u.pathname==='/health')return json(res,200,{ok:true,service:'axiomcode-marketplace',supabase:Boolean(SUPABASE_URL&&SUPABASE_SERVICE_ROLE_KEY)});
+    if(req.method==='GET'&&u.pathname==='/health')return json(res,200,{ok:true,service:'axiomcode-marketplace',supabase:Boolean(SUPABASE_URL&&SUPABASE_SECRET_KEY)});
     if(req.method==='GET'&&u.pathname==='/api/catalog')return json(res,200,await readCatalog());
     if(req.method==='GET'&&u.pathname==='/api/editor/latest')return json(res,200,await latestEditorRelease());
     if(req.method==='POST'&&u.pathname==='/api/inspect'){
@@ -290,4 +292,4 @@ async function handler(req,res){
 if(require.main===module){
   http.createServer(handler).listen(PORT,'0.0.0.0',()=>console.log('AxiomCode Marketplace on '+PORT));
 }
-module.exports={parseRepoUrl,validateManifest,compareVersions,catalogFromRows,rowToExtension,inspectRepository,publishRepository,latestEditorRelease,handler};
+module.exports={parseRepoUrl,validateManifest,compareVersions,catalogFromRows,rowToExtension,supabaseConfig,inspectRepository,publishRepository,latestEditorRelease,handler};
