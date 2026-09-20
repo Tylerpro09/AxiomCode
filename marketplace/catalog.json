@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "name": "AxiomCode Marketplace",
+  "generatedAt": "2026-09-19T00:00:00Z",
+  "extensions": [
+    {
+      "id": "axiom.scratch-mode",
+      "name": "Modo Scratch",
+      "version": "2.2.0",
+      "description": "Scratch 3 oficial integrado con proyectos .sb3 y Axiom 3D WebGL.",
+      "publisher": "AxiomCode",
+      "verified": true,
+      "featured": true,
+      "tags": [
+        "scratch",
+        "bloques",
+        "3d",
+        "educacion"
+      ],
+      "homepage": "https://github.com/Tylerpro09/AxiomCode",
+      "install": {
+        "kind": "bundled",
+        "bundledId": "axiom.scratch-mode"
+      }
+    }
+  ]
+}
