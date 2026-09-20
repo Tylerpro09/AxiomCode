@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "name": "AxiomCode Marketplace",
+  "extensions": [
+    {
+      "id": "axiom.scratch-mode",
+      "name": "Modo Scratch",
+      "version": "2.2.0",
+      "description": "Scratch 3 oficial integrado con proyectos .sb3 y Axiom 3D WebGL.",
+      "publisher": "AxiomCode",
+      "verified": true,
+      "featured": true,
+      "tags": [
+        "scratch",
+        "bloques",
+        "3d"
+      ],
+      "install": {
+        "kind": "bundled",
+        "bundledId": "axiom.scratch-mode"
+      }
+    }
+  ]
+}
