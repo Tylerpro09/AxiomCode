@@ -319,7 +319,9 @@
         rotation:[0,0,0],
         scale:[s,s,s],
         color:color4(color),
-        visible:true
+        visible:true,
+        velocity:[0,0,0],
+        gravityScale:1
       });
     }
 
@@ -369,6 +371,33 @@
             X:{type:'number', defaultValue:1},
             Y:{type:'number', defaultValue:0},
             Z:{type:'number', defaultValue:0}
+          }},
+          {opcode:'moveToward', blockType:'command', text:'mover [ID] hacia [TARGET] velocidad [SPEED]', arguments:{
+            ID:{type:'string', defaultValue:'jugador'},
+            TARGET:{type:'string', defaultValue:'meta'},
+            SPEED:{type:'number', defaultValue:0.2}
+          }},
+          {opcode:'setVelocity', blockType:'command', text:'velocidad de [ID] x [X] y [Y] z [Z]', arguments:{
+            ID:{type:'string', defaultValue:'cubo1'},
+            X:{type:'number', defaultValue:0},
+            Y:{type:'number', defaultValue:0},
+            Z:{type:'number', defaultValue:0}
+          }},
+          {opcode:'changeVelocity', blockType:'command', text:'cambiar velocidad de [ID] por x [X] y [Y] z [Z]', arguments:{
+            ID:{type:'string', defaultValue:'cubo1'},
+            X:{type:'number', defaultValue:0},
+            Y:{type:'number', defaultValue:1},
+            Z:{type:'number', defaultValue:0}
+          }},
+          {opcode:'setGravityScale', blockType:'command', text:'gravedad de [ID] multiplicador [SCALE]', arguments:{
+            ID:{type:'string', defaultValue:'cubo1'},
+            SCALE:{type:'number', defaultValue:1}
+          }},
+          {opcode:'stepPhysics', blockType:'command', text:'simular física dt [DT] gravedad [GRAVITY] suelo y [FLOOR] rebote [BOUNCE]', arguments:{
+            DT:{type:'number', defaultValue:0.033},
+            GRAVITY:{type:'number', defaultValue:9.8},
+            FLOOR:{type:'number', defaultValue:-3},
+            BOUNCE:{type:'number', defaultValue:0.3}
           }},
           {opcode:'setRotation', blockType:'command', text:'girar [ID] a x [X] y [Y] z [Z] grados', arguments:{
             ID:{type:'string', defaultValue:'cubo1'},
@@ -453,6 +482,21 @@
             A:{type:'string', defaultValue:'jugador'},
             B:{type:'string', defaultValue:'meta'}
           }},
+          {opcode:'velocityOf', blockType:'reporter', text:'velocidad [AXIS] de [ID]', arguments:{
+            AXIS:{type:'string', menu:'AXIS', defaultValue:'y'},
+            ID:{type:'string', defaultValue:'cubo1'}
+          }},
+          {opcode:'touchingObjects', blockType:'reporter', text:'[A] toca [B] radio [DIST] (1/0)', arguments:{
+            A:{type:'string', defaultValue:'jugador'},
+            B:{type:'string', defaultValue:'meta'},
+            DIST:{type:'number', defaultValue:1}
+          }},
+          {opcode:'cameraFollow', blockType:'command', text:'cámara sigue [ID] offset x [X] y [Y] z [Z]', arguments:{
+            ID:{type:'string', defaultValue:'jugador'},
+            X:{type:'number', defaultValue:0},
+            Y:{type:'number', defaultValue:2},
+            Z:{type:'number', defaultValue:6}
+          }},
           {opcode:'moveCollide', blockType:'command', text:'mover [ID] x [X] y [Y] z [Z] evitando [PREFIX] radio [DIST]', arguments:{
             ID:{type:'string', defaultValue:'jugador'},
             X:{type:'number', defaultValue:0.2},
@@ -500,6 +544,52 @@
       obj.position[2] = coord(obj.position[2] + finite(args.Z));
     }
 
+    moveToward(args) {
+      const obj=this.engine.get(args.ID), target=this.engine.get(args.TARGET);
+      if(!obj||!target) return;
+      const dx=target.position[0]-obj.position[0],dy=target.position[1]-obj.position[1],dz=target.position[2]-obj.position[2];
+      const len=Math.hypot(dx,dy,dz); if(len<1e-9) return;
+      const speed=finite(args.SPEED,0.2);
+      obj.position[0]=coord(obj.position[0]+dx/len*speed);
+      obj.position[1]=coord(obj.position[1]+dy/len*speed);
+      obj.position[2]=coord(obj.position[2]+dz/len*speed);
+    }
+
+    setVelocity(args) {
+      const obj=this.engine.get(args.ID); if(!obj) return;
+      obj.velocity=[finite(args.X),finite(args.Y),finite(args.Z)];
+    }
+
+    changeVelocity(args) {
+      const obj=this.engine.get(args.ID); if(!obj) return;
+      obj.velocity=obj.velocity||[0,0,0];
+      obj.velocity[0]+=finite(args.X); obj.velocity[1]+=finite(args.Y); obj.velocity[2]+=finite(args.Z);
+    }
+
+    setGravityScale(args) {
+      const obj=this.engine.get(args.ID); if(!obj) return;
+      obj.gravityScale=clamp(finite(args.SCALE,1),-1000,1000);
+    }
+
+    stepPhysics(args) {
+      const dt=clamp(Math.abs(finite(args.DT,0.033)),0,5);
+      const gravity=clamp(finite(args.GRAVITY,9.8),-100000,100000);
+      const floor=coord(args.FLOOR);
+      const bounce=clamp(finite(args.BOUNCE,0.3),0,1);
+      for(const obj of this.engine.objects.values()){
+        obj.velocity=obj.velocity||[0,0,0];
+        const gs=Number.isFinite(obj.gravityScale)?obj.gravityScale:1;
+        obj.velocity[1]-=gravity*gs*dt;
+        obj.position[0]=coord(obj.position[0]+obj.velocity[0]*dt);
+        obj.position[1]=coord(obj.position[1]+obj.velocity[1]*dt);
+        obj.position[2]=coord(obj.position[2]+obj.velocity[2]*dt);
+        if(obj.position[1]<floor){
+          obj.position[1]=floor;
+          if(obj.velocity[1]<0)obj.velocity[1]=-obj.velocity[1]*bounce;
+        }
+      }
+    }
+
     setRotation(args) {
       const obj = this.engine.get(args.ID); if (!obj) return;
       obj.rotation = [finite(args.X), finite(args.Y), finite(args.Z)];
@@ -540,7 +630,9 @@
         rotation:source.rotation.slice(),
         scale:source.scale.slice(),
         color:source.color.slice(),
-        visible:source.visible!==false
+        visible:source.visible!==false,
+        velocity:(source.velocity||[0,0,0]).slice(),
+        gravityScale:Number.isFinite(source.gravityScale)?source.gravityScale:1
       });
     }
 
@@ -612,6 +704,28 @@
       const a=this.engine.get(args.A), b=this.engine.get(args.B);
       if(!a||!b) return 999999;
       return Math.hypot(a.position[0]-b.position[0],a.position[1]-b.position[1],a.position[2]-b.position[2]);
+    }
+
+    velocityOf(args) {
+      const obj=this.engine.get(args.ID); if(!obj) return 0;
+      const v=obj.velocity||[0,0,0], axis=String(args.AXIS).toLowerCase();
+      return v[axis==='y'?1:axis==='z'?2:0];
+    }
+
+    touchingObjects(args) {
+      const a=this.engine.get(args.A), b=this.engine.get(args.B); if(!a||!b) return 0;
+      const dist=Math.max(0,finite(args.DIST,1));
+      return Math.hypot(a.position[0]-b.position[0],a.position[1]-b.position[1],a.position[2]-b.position[2])<=dist?1:0;
+    }
+
+    cameraFollow(args) {
+      const obj=this.engine.get(args.ID); if(!obj) return;
+      this.engine.camera.target=obj.position.slice();
+      this.engine.camera.position=[
+        coord(obj.position[0]+finite(args.X)),
+        coord(obj.position[1]+finite(args.Y)),
+        coord(obj.position[2]+finite(args.Z))
+      ];
     }
 
     moveCollide(args) {
