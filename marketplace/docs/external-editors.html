@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Conectar AxiomCode Marketplace con otros editores e IDEs.">
+<title>Otros editores · AxiomCode Docs</title>
+<link rel="stylesheet" href="../style.css?v=20260920-4">
+</head>
+<body>
+<header class="top"><a class="brand" href="../"><span>A</span>AxiomCode Marketplace</a><nav class="top-nav"><a href="../#editor">Editor</a><a href="../#extensions">Extensiones</a><a href="../docs.html" class="active">Documentación</a><a href="../#publish">Publicar</a><a class="github" href="https://github.com/Tylerpro09/AxiomCode">GitHub</a></nav></header>
+<main class="docs-page"><section class="docs-hero docs-hero-compact"><p class="eyebrow">DOCUMENTACIÓN · OTROS EDITORES</p><h1>Otros editores</h1><p>Conectar AxiomCode Marketplace con otros editores e IDEs.</p></section><div class="docs-layout"><aside class="docs-nav"><strong>Documentación</strong><a href="quickstart.html">Inicio rápido</a><a href="structure.html">Estructura</a><a href="manifest.html">extension.json</a><a href="rules.html">Reglas y límites</a><a href="security.html">AxiomGuard</a><a href="external-editors.html" class="active">Otros editores</a><a href="publish-flow.html">Publicación</a><a href="updates.html">Actualizar</a><a href="errors.html">Errores comunes</a><a href="../docs.html">← Índice</a></aside><article class="docs-content"><section id="external-editors" class="doc-section">
+  <h2>Conectar AxiomCode Marketplace a otros editores de código</h2>
+  <p>AxiomCode Marketplace no está limitada al editor AxiomCode. Otros editores, IDEs o herramientas pueden consumir el catálogo público, comprobar versiones y descargar los archivos de una extensión mediante HTTPS.</p>
+
+  <div class="callout"><strong>Compatibilidad:</strong> conectar la tienda permite descubrir y descargar extensiones. Para ejecutarlas, el otro editor debe implementar las contribuciones y APIs que use cada extensión. Una extensión creada específicamente para AxiomCode puede requerir una capa de compatibilidad en el editor externo.</div>
+
+  <h3>Endpoint principal del catálogo</h3>
+  <pre><code>GET https://axiomcode-marketplace.onrender.com/api/catalog</code></pre>
+  <p>La respuesta usa <code>schemaVersion: 1</code> e incluye el array <code>extensions</code>.</p>
+
+  <pre><code>{
+  "schemaVersion": 1,
+  "name": "AxiomCode Marketplace",
+  "extensions": [
+    {
+      "id": "autor.mi-extension",
+      "name": "Mi extensión",
+      "version": "1.2.0",
+      "description": "...",
+      "publisher": "Autor",
+      "tags": ["editor"],
+      "install": {
+        "kind": "files",
+        "files": [
+          {
+            "path": "extension.json",
+            "url": "https://raw.githubusercontent.com/...",
+            "size": 1200
+          }
+        ]
+      }
+    }
+  ]
+}</code></pre>
+
+  <h3>Integración mínima en JavaScript</h3>
+  <pre><code>const MARKETPLACE =
+  'https://axiomcode-marketplace.onrender.com/api/catalog';
+
+async function obtenerExtensiones() {
+  const response = await fetch(MARKETPLACE);
+  if (!response.ok) throw new Error('Marketplace HTTP ' + response.status);
+
+  const catalogo = await response.json();
+  return catalogo.extensions;
+}
+
+const extensiones = await obtenerExtensiones();
+
+for (const extension of extensiones) {
+  console.log(
+    extension.id,
+    extension.version,
+    extension.install?.kind
+  );
+}</code></pre>
+
+  <h3>Instalar una extensión desde otro editor</h3>
+  <ol class="steps compact">
+    <li><strong>Consulta <code>/api/catalog</code>.</strong><span>Busca la extensión por su <code>id</code>.</span></li>
+    <li><strong>Compara la versión.</strong><span>Si la versión del catálogo es mayor que la instalada, ofrece Actualizar.</span></li>
+    <li><strong>Lee <code>install.kind</code>.</strong><span>Las extensiones de comunidad normalmente usan <code>files</code>. Las extensiones <code>bundled</code> forman parte de AxiomCode y no son un paquete independiente.</span></li>
+    <li><strong>Descarga cada archivo.</strong><span>Usa la URL HTTPS de <code>install.files</code> y conserva la ruta relativa indicada por <code>path</code>.</span></li>
+    <li><strong>Valida el paquete.</strong><span>Comprueba <code>extension.json</code>, ID, versión y cualquier hash disponible antes de activar la extensión.</span></li>
+    <li><strong>Ejecuta tu propia capa de seguridad.</strong><span>Se recomienda aplicar un análisis equivalente a AxiomGuard antes de cargar código de terceros.</span></li>
+  </ol>
+
+  <h3>Detectar actualizaciones</h3>
+  <pre><code>if (versionRemota &gt; versionInstalada) {
+  mostrarBotonActualizar();
+}</code></pre>
+  <p>Para producción, el editor externo debe usar una comparación de versiones semántica y no una comparación alfabética simple.</p>
+
+  <h3>Otros endpoints públicos</h3>
+  <div class="field-table">
+    <div class="field-row field-head"><span>Endpoint</span><span>Método</span><span>Uso</span></div>
+    <div class="field-row"><code>/api/catalog</code><span>GET</span><span>Catálogo de extensiones para AxiomCode u otros editores.</span></div>
+    <div class="field-row"><code>/api/inspect</code><span>POST</span><span>Analiza un repositorio GitHub antes de publicarlo y devuelve también el resultado de AxiomGuard.</span></div>
+    <div class="field-row"><code>/api/publish</code><span>POST</span><span>Publica una extensión válida desde un repositorio GitHub público.</span></div>
+    <div class="field-row"><code>/api/editor/latest</code><span>GET</span><span>Última release oficial del editor AxiomCode.</span></div>
+    <div class="field-row"><code>/health</code><span>GET</span><span>Estado del servicio Marketplace y de sus capas de seguridad.</span></div>
+  </div>
+
+  <h3>Ejemplo para otro editor basado en Electron</h3>
+  <pre><code>const catalog = await fetch(
+  'https://axiomcode-marketplace.onrender.com/api/catalog'
+).then(r =&gt; r.json());
+
+const extension = catalog.extensions.find(
+  x =&gt; x.id === 'autor.mi-extension'
+);
+
+if (extension?.install?.kind === 'files') {
+  for (const file of extension.install.files) {
+    const data = await fetch(file.url).then(r =&gt; r.arrayBuffer());
+
+    // 1. validar ruta
+    // 2. validar hash si está disponible
+    // 3. ejecutar análisis de seguridad
+    // 4. guardar dentro de la carpeta aislada de extensiones
+  }
+}</code></pre>
+
+  <p>Esto permite usar AxiomCode Marketplace como una <strong>tienda compartida de extensiones</strong> para varios editores, siempre que cada editor implemente su propio instalador, aislamiento, permisos y compatibilidad de API.</p>
+</section><div class="docs-pagination"><a href="security.html">← AxiomGuard</a><a href="publish-flow.html">Publicación →</a></div></article></div></main>
+<footer><span>AxiomCode Marketplace</span><span>Documentación de extensiones</span></footer>
+</body>
+</html>
