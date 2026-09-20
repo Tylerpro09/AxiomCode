@@ -3,7 +3,11 @@ const fs=require('fs');
 const fsp=fs.promises;
 const path=require('path');
 const crypto=require('crypto');
+const os=require('os');
+const {Readable,Transform}=require('stream');
+const {pipeline}=require('stream/promises');
 const {URL}=require('url');
+const {scanExtensionFiles,combineSecurityReports,assertExtensionSafe,shouldInspectFile}=require('../backend/services/extensionSecurity');
 
 const PORT=Number(process.env.PORT||3000);
 const GITHUB_OWNER=process.env.GITHUB_OWNER||'Tylerpro09';
@@ -16,7 +20,14 @@ const SUPABASE_JWKS_URL=process.env.SUPABASE_JWKS_URL||'';
 const SITE_ORIGIN=process.env.SITE_ORIGIN||'*';
 const WEB_ROOT=path.resolve(__dirname,'../marketplace');
 const MAX_BODY=64*1024;
+const VIRUSTOTAL_API_KEY=String(process.env.VIRUSTOTAL_API_KEY||'').trim();
+const VIRUSTOTAL_REQUIRED=/^(1|true|yes)$/i.test(String(process.env.VIRUSTOTAL_REQUIRED||'false'));
+const VIRUSTOTAL_MALICIOUS_THRESHOLD=Math.max(1,Number(process.env.VIRUSTOTAL_MALICIOUS_THRESHOLD||2)||2);
+const VIRUSTOTAL_SUSPICIOUS_THRESHOLD=Math.max(1,Number(process.env.VIRUSTOTAL_SUSPICIOUS_THRESHOLD||4)||4);
+const VIRUSTOTAL_MAX_UPLOAD_BYTES=650*1024*1024;
+const VIRUSTOTAL_SMALL_UPLOAD_BYTES=32*1024*1024;
 const rate=new Map();
+const virusTotalCache=new Map();
 let scratchReleaseCache={expires:0,value:null};
 
 function json(res,status,data,extra={}){
@@ -96,6 +107,70 @@ async function readRepoFile(owner,repo,filePath,ref){
   if(Array.isArray(data)||!data.content)throw Error(filePath+' no es un archivo');
   return Buffer.from(data.content,'base64');
 }
+async function fetchRawBytes(url,maxBytes=100*1024*1024){
+  const r=await fetch(url,{headers:{'User-Agent':'AxiomCode-AxiomGuard/1'},signal:AbortSignal.timeout(60000)});
+  if(!r.ok)throw Error('No se pudo descargar archivo para análisis: HTTP '+r.status);
+  const len=Number(r.headers.get('content-length')||0);
+  if(len&&len>maxBytes)throw Error('Archivo demasiado grande para análisis');
+  const bytes=Buffer.from(await r.arrayBuffer());
+  if(bytes.length>maxBytes)throw Error('Archivo demasiado grande para análisis');
+  return bytes;
+}
+async function virusTotalCheck(report){
+  if(!VIRUSTOTAL_API_KEY){
+    if(VIRUSTOTAL_REQUIRED)throw Error('VirusTotal es obligatorio pero VIRUSTOTAL_API_KEY no está configurada');
+    return {enabled:false,checked:0,detections:[]};
+  }
+  const detections=[]; let checked=0;
+  const hashes=Object.entries(report?.hashes||{}).slice(0,4);
+  for(const [file,hash] of hashes){
+    const cached=virusTotalCache.get(hash);
+    if(cached&&cached.expires>Date.now()){
+      checked++;
+      if(cached.malicious>=VIRUSTOTAL_MALICIOUS_THRESHOLD||cached.suspicious>=VIRUSTOTAL_SUSPICIOUS_THRESHOLD)detections.push({file,hash,malicious:cached.malicious,suspicious:cached.suspicious});
+      continue;
+    }
+    const r=await fetch('https://www.virustotal.com/api/v3/files/'+encodeURIComponent(hash),{
+      headers:{'x-apikey':VIRUSTOTAL_API_KEY,'Accept':'application/json'},
+      signal:AbortSignal.timeout(15000)
+    });
+    if(r.status===404){virusTotalCache.set(hash,{expires:Date.now()+60*60*1000,malicious:0,suspicious:0,unknown:true});checked++;continue;}
+    if(!r.ok){
+      if(VIRUSTOTAL_REQUIRED)throw Error('VirusTotal HTTP '+r.status);
+      break;
+    }
+    const body=await r.json();
+    const stats=body?.data?.attributes?.last_analysis_stats||{};
+    const malicious=Number(stats.malicious||0),suspicious=Number(stats.suspicious||0);
+    virusTotalCache.set(hash,{expires:Date.now()+60*60*1000,malicious,suspicious});
+    checked++;
+    if(malicious>=VIRUSTOTAL_MALICIOUS_THRESHOLD||suspicious>=VIRUSTOTAL_SUSPICIOUS_THRESHOLD){
+      detections.push({file,hash,malicious,suspicious});
+    }
+  }
+  return {enabled:true,checked,detections};
+}
+async function scanRepositorySecurity(parsed,commitSha,files){
+  const reports=[];
+  const rawUrl=p=>'https://raw.githubusercontent.com/'+parsed.owner+'/'+parsed.repo+'/'+commitSha+'/'+p.split('/').map(encodeURIComponent).join('/');
+  for(const f of files){
+    if(!shouldInspectFile(f.path))continue;
+    const bytes=await fetchRawBytes(rawUrl(f.path));
+    reports.push(scanExtensionFiles([{path:f.path,bytes}]));
+  }
+  const report=combineSecurityReports(reports);
+  report.virusTotal=await virusTotalCheck(report);
+  if(report.virusTotal.detections.length){
+    for(const hit of report.virusTotal.detections){
+      report.findings.push({file:hit.file,rule:'virustotal-detection',severity:'critical',score:20,message:'VirusTotal detectó este archivo como malicioso o sospechoso'});
+      report.score+=20;
+    }
+    report.verdict='blocked';
+  }
+  assertExtensionSafe(report);
+  return report;
+}
+
 async function latestBundledScratch(){
   const now=Date.now();
   if(scratchReleaseCache.value && scratchReleaseCache.expires>now) return scratchReleaseCache.value;
@@ -144,6 +219,7 @@ async function inspectRepository(repoUrl,{includeFiles=false}={}){
   }
 
   const rawUrl=p=>'https://raw.githubusercontent.com/'+parsed.owner+'/'+parsed.repo+'/'+commit.sha+'/'+p.split('/').map(encodeURIComponent).join('/');
+  result.security=await scanRepositorySecurity(parsed,commit.sha,files);
   result.files=files.map(f=>({path:f.path,url:rawUrl(f.path),size:Number(f.size||0)}));
   result.icon=manifest.icon&&files.some(f=>f.path===manifest.icon)?rawUrl(manifest.icon):null;
   result.totalBytes=total;
@@ -229,7 +305,7 @@ async function publishRepository(repoUrl,ipHash=''){
     source_repo:inspected.repoUrl,
     source_commit:inspected.commitSha,
     icon:inspected.icon,
-    install:{kind:'files',files:inspected.files},
+    install:{kind:'files',files:inspected.files,security:{engine:inspected.security.engine,verdict:inspected.security.verdict,score:inspected.security.score,scannedAt:new Date().toISOString(),virusTotal:inspected.security.virusTotal}},
     updated_at:new Date().toISOString(),
     published_at:new Date().toISOString()
   };
@@ -293,12 +369,21 @@ async function handler(req,res){
   if(req.method==='OPTIONS')return cors(res);
   const u=new URL(req.url,'http://localhost');
   try{
-    if(req.method==='GET'&&u.pathname==='/health')return json(res,200,{ok:true,service:'axiomcode-marketplace',supabase:Boolean(SUPABASE_URL&&SUPABASE_SECRET_KEY)});
+    if(req.method==='GET'&&u.pathname==='/health')return json(res,200,{ok:true,service:'axiomcode-marketplace',supabase:Boolean(SUPABASE_URL&&SUPABASE_SECRET_KEY),axiomGuard:true,virusTotal:Boolean(VIRUSTOTAL_API_KEY)});
     if(req.method==='GET'&&u.pathname==='/api/catalog')return json(res,200,await readCatalog());
     if(req.method==='GET'&&u.pathname==='/api/editor/latest')return json(res,200,await latestEditorRelease());
     if(req.method==='POST'&&u.pathname==='/api/inspect'){
       const b=await bodyJson(req);
-      return json(res,200,{ok:true,extension:await inspectRepository(b.repoUrl)});
+      const inspected=await inspectRepository(b.repoUrl,{includeFiles:true});
+      return json(res,200,{ok:true,extension:{
+        repoUrl:inspected.repoUrl,owner:inspected.owner,repo:inspected.repo,branch:inspected.branch,
+        commitSha:inspected.commitSha,manifest:inspected.manifest,icon:inspected.icon,totalBytes:inspected.totalBytes,
+        security:{
+          engine:inspected.security.engine,verdict:inspected.security.verdict,score:inspected.security.score,
+          filesScanned:inspected.security.filesScanned,findings:inspected.security.findings,
+          virusTotal:inspected.security.virusTotal
+        }
+      }});
     }
     if(req.method==='POST'&&u.pathname==='/api/publish'){
       enforceRate(req);
