@@ -77,3 +77,4 @@ loadEditorRelease();
 });
 $('#search').addEventListener('input',e=>render(e.target.value));
 loadCatalog();
+loadEditorRelease();
