@@ -9,6 +9,7 @@ const { exec, spawn } = require('child_process');
 const { Transform, Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const { createBackend } = require('./backend');
+const {scanExtensionFiles,assertExtensionSafe}=require('./backend/services/extensionSecurity');
 let scratchCore;
 const SCRATCH_EXTENSION_ID = 'axiom.scratch-mode';
 const MAX_AXIOM_SCRATCH_BYTES = 100 * 1024 * 1024;
@@ -286,7 +287,10 @@ ipcMain.handle('scratch:openExtensionJs', async () => {
   if(result.canceled) return null;
   const filePath=result.filePaths[0], st=await fsp.stat(filePath);
   if(st.size>2*1024*1024) throw new Error('La extensión JavaScript supera 2 MiB');
-  return {name:path.basename(filePath),code:await fsp.readFile(filePath,'utf8')};
+  const bytes=await fsp.readFile(filePath);
+  const security=scanExtensionFiles([{path:path.basename(filePath),bytes}]);
+  assertExtensionSafe(security);
+  return {name:path.basename(filePath),code:bytes.toString('utf8'),security:{engine:security.engine,verdict:security.verdict,score:security.score,findings:security.findings}};
 });
 ipcMain.handle('scratch:openSb3', async (_, requestedPath) => {
   await requireScratchInstalled();
