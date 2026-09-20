@@ -2,6 +2,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
+const {scanExtensionFiles,combineSecurityReports,assertExtensionSafe,shouldInspectFile}=require('./extensionSecurity');
 
 const DEFAULT_MARKETPLACE_URL = 'https://axiomcode-marketplace.onrender.com/api/catalog';
 const MAX_CATALOG_BYTES = Number.POSITIVE_INFINITY;
@@ -15,6 +16,7 @@ class AxiomExtensionService {
     this.statePath = path.join(app.getPath('userData'), 'extension-state.json');
     this.marketplaceCachePath = path.join(app.getPath('userData'), 'marketplace-cache.json');
     this.fallbackCatalogPath = path.join(appRoot, 'marketplace', 'fallback.json');
+    this.quarantineRoot = path.join(app.getPath('userData'), 'extension-quarantine');
     this.marketplaceUrl = process.env.AXIOM_MARKETPLACE_URL || DEFAULT_MARKETPLACE_URL;
   }
 
@@ -22,12 +24,45 @@ class AxiomExtensionService {
 
   async readState() {
     try { return JSON.parse(await fsp.readFile(this.statePath, 'utf8')); }
-    catch { return {installed:{}}; }
+    catch { return {installed:{},security:{}}; }
   }
 
   async writeState(state) {
     await this.ensure();
     await fsp.writeFile(this.statePath, JSON.stringify(state, null, 2), 'utf8');
+  }
+
+  async writeQuarantineReport(entry, report, phase='install') {
+    await fsp.mkdir(this.quarantineRoot,{recursive:true});
+    const safeId=String(entry?.id||'unknown').replace(/[^A-Za-z0-9._-]/g,'_').slice(0,128);
+    const file=path.join(this.quarantineRoot,safeId+'-'+Date.now()+'.json');
+    await fsp.writeFile(file,JSON.stringify({
+      id:entry?.id||null,
+      name:entry?.name||null,
+      version:entry?.version||null,
+      phase,
+      quarantinedAt:new Date().toISOString(),
+      report
+    },null,2),'utf8');
+    return file;
+  }
+
+  async scanDirectorySecurity(root) {
+    const reports=[];
+    const walk=async(dir,relative='')=>{
+      const entries=await fsp.readdir(dir,{withFileTypes:true});
+      for(const entry of entries){
+        if(entry.name==='.git')continue;
+        const rel=relative?relative+'/'+entry.name:entry.name;
+        const full=path.join(dir,entry.name);
+        if(entry.isDirectory()){ await walk(full,rel); continue; }
+        if(!entry.isFile()||!shouldInspectFile(rel))continue;
+        const bytes=await fsp.readFile(full);
+        reports.push(scanExtensionFiles([{path:rel,bytes}]));
+      }
+    };
+    await walk(root);
+    return combineSecurityReports(reports);
   }
 
   async scanRoot(root, scope) {
@@ -38,11 +73,12 @@ class AxiomExtensionService {
       const dir = path.join(root, entry.name);
       try {
         const manifest = JSON.parse(await fsp.readFile(path.join(dir, 'extension.json'), 'utf8'));
+        const security=scope==='user'?await this.scanDirectorySecurity(dir):null;
         result.push({
           scope, path:dir, folder:entry.name, id:manifest.id||entry.name, name:manifest.name||entry.name,
           version:manifest.version||'0.0.0', description:manifest.description||'', manifestEnabled:manifest.enabled!==false,
           installedByDefault:manifest.installedByDefault!==false, contributes:manifest.contributes||{},
-          publisher:manifest.publisher||'Local'
+          publisher:manifest.publisher||'Local',security,securityBlocked:security?.verdict==='blocked'
         });
       } catch {}
     }
@@ -56,11 +92,11 @@ class AxiomExtensionService {
 
   async list() {
     const state = await this.readState(), entries = await this.entries();
-    const userIds = new Set(entries.filter(x=>x.scope==='user').map(x=>x.id));
+    const userIds = new Set(entries.filter(x=>x.scope==='user'&&!x.securityBlocked).map(x=>x.id));
     return entries.filter((x,i,a)=>a.findIndex(y=>y.id===x.id)===i).map(x => {
       const explicit = state.installed?.[x.id];
-      const installed = userIds.has(x.id) || (explicit === undefined ? x.installedByDefault : explicit === true);
-      return {...x,installed,enabled:installed&&x.manifestEnabled};
+      const installed = !x.securityBlocked && (userIds.has(x.id) || (explicit === undefined ? x.installedByDefault : explicit === true));
+      return {...x,installed,enabled:installed&&x.manifestEnabled&&!x.securityBlocked,security:x.security||state.security?.[x.id]||null};
     });
   }
 
@@ -172,6 +208,8 @@ class AxiomExtensionService {
     const target = path.join(this.userRoot, entry.id);
     const backup = target+'.backup-'+Date.now();
     let total = 0, backedUp = false;
+    const securityReports=[];
+    let securityReport=null;
     await fsp.mkdir(temp,{recursive:true});
     try {
       for (const spec of files) {
@@ -183,11 +221,17 @@ class AxiomExtensionService {
           const actual=crypto.createHash('sha256').update(bytes).digest('hex');
           if(actual.toLowerCase()!==String(spec.sha256).toLowerCase()) throw new Error('SHA-256 incorrecto para '+rel);
         }
+        if(shouldInspectFile(rel)) securityReports.push(scanExtensionFiles([{path:rel,bytes}]));
         const out=path.join(temp,...rel.split('/'));
         const resolved=path.resolve(out), root=path.resolve(temp)+path.sep;
         if(!resolved.startsWith(root)) throw new Error('Ruta fuera del paquete');
         await fsp.mkdir(path.dirname(out),{recursive:true});
         await fsp.writeFile(out,bytes);
+      }
+      securityReport=combineSecurityReports(securityReports);
+      if(securityReport.verdict==='blocked'){
+        securityReport.quarantineReport=await this.writeQuarantineReport(entry,securityReport,'install');
+        assertExtensionSafe(securityReport);
       }
       const manifestPath=path.join(temp,'extension.json');
       const manifest=JSON.parse(await fsp.readFile(manifestPath,'utf8'));
@@ -196,7 +240,7 @@ class AxiomExtensionService {
       if(fs.existsSync(target)){await fsp.rename(target,backup);backedUp=true;}
       await fsp.rename(temp,target);
       if(backedUp) await fsp.rm(backup,{recursive:true,force:true});
-      const state=await this.readState();state.installed||={};state.installed[entry.id]=true;await this.writeState(state);
+      const state=await this.readState();state.installed||={};state.security||={};state.installed[entry.id]=true;state.security[entry.id]={engine:securityReport?.engine||'AxiomGuard Static 1.0',verdict:securityReport?.verdict||'clean',score:securityReport?.score||0,scannedAt:new Date().toISOString(),version:entry.version,hashes:securityReport?.hashes||{}};await this.writeState(state);
       return (await this.list()).find(x=>x.id===entry.id);
     } catch(error) {
       await fsp.rm(temp,{recursive:true,force:true}).catch(()=>{});
