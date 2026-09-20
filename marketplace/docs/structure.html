@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Estructura recomendada del repositorio.">
+<title>Estructura · AxiomCode Docs</title>
+<link rel="stylesheet" href="../style.css?v=20260920-4">
+</head>
+<body>
+<header class="top"><a class="brand" href="../"><span>A</span>AxiomCode Marketplace</a><nav class="top-nav"><a href="../#editor">Editor</a><a href="../#extensions">Extensiones</a><a href="../docs.html" class="active">Documentación</a><a href="../#publish">Publicar</a><a class="github" href="https://github.com/Tylerpro09/AxiomCode">GitHub</a></nav></header>
+<main class="docs-page"><section class="docs-hero docs-hero-compact"><p class="eyebrow">DOCUMENTACIÓN · ESTRUCTURA</p><h1>Estructura</h1><p>Estructura recomendada del repositorio.</p></section><div class="docs-layout"><aside class="docs-nav"><strong>Documentación</strong><a href="quickstart.html">Inicio rápido</a><a href="structure.html" class="active">Estructura</a><a href="manifest.html">extension.json</a><a href="rules.html">Reglas y límites</a><a href="security.html">AxiomGuard</a><a href="external-editors.html">Otros editores</a><a href="publish-flow.html">Publicación</a><a href="updates.html">Actualizar</a><a href="errors.html">Errores comunes</a><a href="../docs.html">← Índice</a></aside><article class="docs-content"><section id="structure" class="doc-section">
+  <h2>Estructura recomendada</h2>
+  <p><code>extension.json</code> debe estar directamente en la raíz del repositorio.</p>
+  <pre><code>mi-extension/
+├─ extension.json
+├─ icon.png
+├─ main.js
+├─ README.md
+└─ assets/
+   └─ ...</code></pre>
+  <div class="callout"><strong>Importante:</strong> las carpetas <code>.github/</code> y <code>node_modules/</code>, además de <code>.gitignore</code>, no se incluyen en el paquete publicado.</div>
+</section><div class="docs-pagination"><a href="quickstart.html">← Inicio rápido</a><a href="manifest.html">extension.json →</a></div></article></div></main>
+<footer><span>AxiomCode Marketplace</span><span>Documentación de extensiones</span></footer>
+</body>
+</html>
