@@ -5,8 +5,8 @@
     {
       "id": "axiom.scratch-mode",
       "name": "Modo Scratch",
-      "version": "2.2.0",
-      "description": "Scratch 3 oficial integrado con proyectos .sb3 y Axiom 3D WebGL.",
+      "version": "2.3.0",
+      "description": "Scratch 3 oficial ampliado con proyectos más grandes, modo legacy de alta capacidad y Axiom 3D WebGL con miles de objetos y nuevos bloques.",
       "publisher": "AxiomCode",
       "verified": true,
       "featured": true,
