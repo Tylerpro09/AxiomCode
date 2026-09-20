@@ -14,3 +14,14 @@
 .field-table{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:18px}.field-row{display:grid;grid-template-columns:150px 95px 1fr;gap:14px;padding:11px 14px;border-top:1px solid var(--line);align-items:start}.field-row:first-child{border-top:0}.field-head{background:#161b22;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em;font-weight:700}.field-row code{width:max-content}.rules{padding-left:22px}.rules li{margin:9px 0}.faq{display:grid;gap:8px}.faq details{border:1px solid var(--line);border-radius:9px;background:var(--panel);padding:12px 14px}.faq summary{cursor:pointer;color:var(--text);font-weight:650}.faq p{margin:10px 0 2px}
 @media(max-width:900px){.docs-layout{grid-template-columns:1fr}.docs-nav{display:none}.field-row{grid-template-columns:120px 75px 1fr}}
 @media(max-width:620px){.docs-actions{display:block}.docs-primary,.docs-secondary{width:100%;justify-content:center;margin-top:8px}.field-row{grid-template-columns:1fr}.field-head{display:none}.field-row>span:nth-child(2):before{content:"Requerido: ";color:var(--muted)}.docs-page{padding-top:28px}}
+
+/* Documentation index and split pages */
+.docs-index-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding-bottom:50px}
+.docs-index-card{display:grid;grid-template-columns:44px minmax(0,1fr) 24px;gap:14px;align-items:center;border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:20px;color:var(--text);text-decoration:none;transition:border-color .15s ease,transform .15s ease,background .15s ease}
+.docs-index-card:hover{border-color:#388bfd;background:#19202a;transform:translateY(-1px)}
+.docs-index-number{width:38px;height:38px;border-radius:9px;background:#21262d;display:grid;place-items:center;color:#79c0ff;font-size:12px;font-weight:750}
+.docs-index-card h2{font-size:17px;margin:0 0 4px}.docs-index-card p{margin:0;color:var(--muted);font-size:13px}.docs-index-arrow{color:#79c0ff;font-size:20px;text-align:right}
+.docs-nav a.active{color:#fff;font-weight:700;border-right:2px solid #2f81f7;margin-right:-23px;padding-right:20px}
+.docs-hero-compact{padding-bottom:28px}.docs-hero-compact h1{font-size:clamp(34px,5vw,50px)}
+.docs-pagination{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0 20px}.docs-pagination a{border:1px solid var(--line);background:var(--panel);border-radius:9px;padding:14px;color:#79c0ff;text-decoration:none;font-weight:650}.docs-pagination a:last-child{text-align:right}.docs-pagination a:hover{border-color:#388bfd}
+@media(max-width:760px){.docs-index-grid{grid-template-columns:1fr}.docs-pagination{grid-template-columns:1fr}.docs-pagination a:last-child{text-align:left}}
