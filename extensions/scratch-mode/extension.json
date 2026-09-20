@@ -1,0 +1,15 @@
+{
+  "id": "axiom.scratch-mode",
+  "name": "Modo Scratch",
+  "version": "2.3.0",
+  "description": "Scratch 3 oficial ampliado: proyectos .sb3 más grandes, modo legacy de alta capacidad y Axiom 3D WebGL con miles de objetos, cámara orbital, visibilidad, opacidad, duplicado y más reporteros.",
+  "contributes": {
+    "commands": [
+      {
+        "command": "scratch.open",
+        "title": "Abrir modo Scratch"
+      }
+    ]
+  },
+  "installedByDefault": false
+}
