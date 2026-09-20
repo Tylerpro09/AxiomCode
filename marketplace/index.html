@@ -5,12 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="description" content="Marketplace oficial y gratuita de extensiones para AxiomCode">
 <title>AxiomCode Marketplace</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20260920-2">
 </head>
 <body>
 <header class="top">
   <a class="brand" href="./"><span>A</span>AxiomCode Marketplace</a>
-  <nav class="top-nav"><a href="#editor">Editor</a><a href="#extensions">Extensiones</a><a href="#publish">Publicar</a><a class="github" href="https://github.com/Tylerpro09/AxiomCode">GitHub</a></nav>
+  <nav class="top-nav"><a href="#editor">Editor</a><a href="#extensions">Extensiones</a><a href="docs.html">Documentación</a><a href="#publish">Publicar</a><a class="github" href="https://github.com/Tylerpro09/AxiomCode">GitHub</a></nav>
 </header>
 <main>
 <section class="hero">
@@ -36,13 +36,14 @@
   <div class="publish-copy">
     <p class="eyebrow">PUBLICAR GRATIS</p>
     <h2>Pega la URL de tu repositorio</h2>
-    <p>Tu repositorio debe ser público y tener <code>extension.json</code> en la raíz. Revisamos el manifiesto antes de crear la solicitud de publicación.</p>
+    <p>Tu repositorio debe ser público y tener <code>extension.json</code> en la raíz. Render valida automáticamente el manifiesto antes de publicarlo.</p>
     <ol>
       <li>Repositorio público GitHub</li>
       <li><code>extension.json</code> válido</li>
-      <li>Revisión del mantenedor</li>
-      <li>Publicación automática en el catálogo</li>
+      <li>Validación automática del paquete</li>
+      <li>Publicación en el catálogo de Supabase</li>
     </ol>
+    <p><a class="inline-link" href="docs.html">Leer documentación completa para desarrolladores →</a></p>
   </div>
   <form id="publishForm" class="submit-card">
     <label for="repoUrl">URL del repositorio</label>
