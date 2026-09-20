@@ -35,7 +35,8 @@ function json(res,status,data,extra={}){
   res.writeHead(status,{
     'Content-Type':'application/json; charset=utf-8',
     'Access-Control-Allow-Origin':SITE_ORIGIN,
-    'Access-Control-Allow-Headers':'Content-Type',
+    'Access-Control-Allow-Headers':'Content-Type, Accept, X-Market-Client-Id, X-Market-User-Id, VSCode-SessionId, X-Market-Search-Activity-Id, Activityid, X-Vss-E2eid',
+    'Access-Control-Expose-Headers':'Activityid, X-Vss-E2eid, X-Market-Search-Activity-Id, Server',
     'Access-Control-Allow-Methods':'GET,POST,OPTIONS',
     'Cache-Control':'no-store',
     ...extra
@@ -323,18 +324,25 @@ async function readFallbackCatalog(){
   return {schemaVersion:1,name:'AxiomCode Marketplace',generatedAt:new Date().toISOString(),extensions:[]};
 }
 async function readCatalog(){
-  if(!SUPABASE_URL||!SUPABASE_SECRET_KEY)return readFallbackCatalog();
+  const fallback=await readFallbackCatalog();
+  const scratch=await latestBundledScratch();
+  const bundled=(fallback.extensions||[]).map(ext=>{
+    if(ext.id!=='axiom.scratch-mode'||!scratch)return ext;
+    return {...ext,version:scratch.version,description:scratch.description||ext.description,publisher:scratch.publisher||ext.publisher,install:{kind:'bundled',bundledId:'axiom.scratch-mode'}};
+  });
+  if(!SUPABASE_URL||!SUPABASE_SECRET_KEY)return {...fallback,extensions:bundled};
   try{
     const rows=await sb('marketplace_extensions?select=*&status=eq.published&order=featured.desc,name.asc',{method:'GET'});
-    const scratch=await latestBundledScratch();
     const normalized=(rows||[]).map(row=>{
       if(row.id!=='axiom.scratch-mode'||!scratch)return row;
       return {...row,version:scratch.version,description:scratch.description||row.description,publisher:scratch.publisher||row.publisher,install:{kind:'bundled',bundledId:'axiom.scratch-mode'}};
     });
-    return catalogFromRows(normalized);
+    const merged=new Map(bundled.map(ext=>[ext.id,ext]));
+    for(const ext of catalogFromRows(normalized).extensions)merged.set(ext.id,{...(merged.get(ext.id)||{}),...ext});
+    return {schemaVersion:1,name:'AxiomCode Marketplace',generatedAt:new Date().toISOString(),extensions:[...merged.values()]};
   }catch(error){
     console.warn('Supabase catalog failed, using fallback:',error.message);
-    return readFallbackCatalog();
+    return {...fallback,extensions:bundled};
   }
 }
 async function findExtension(id){
