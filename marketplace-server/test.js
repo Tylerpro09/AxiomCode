@@ -22,3 +22,29 @@ test('Supabase configuration uses server secret variable',()=>{
   assert.equal(typeof cfg.secretConfigured,'boolean');
   assert.equal(typeof cfg.publishableConfigured,'boolean');
 });
+
+const {scanExtensionFiles,assertExtensionSafe}=require('../backend/services/extensionSecurity');
+
+test('AxiomGuard allows normal extension code',()=>{
+  const report=scanExtensionFiles([{path:'main.js',bytes:Buffer.from("function spawnParticle(){ return 1 }\nmodule.exports={spawnParticle};")}]);
+  assert.equal(report.verdict,'clean');
+  assert.doesNotThrow(()=>assertExtensionSafe(report));
+});
+
+test('AxiomGuard blocks child_process and encoded PowerShell',()=>{
+  const report=scanExtensionFiles([{path:'main.js',bytes:Buffer.from("const cp=require('child_process'); cp.exec('powershell.exe -EncodedCommand AAAA');")}]);
+  assert.equal(report.verdict,'blocked');
+  assert.throws(()=>assertExtensionSafe(report),/AxiomGuard bloqueó/);
+  assert.ok(report.findings.some(x=>x.rule==='child-process'));
+});
+
+test('AxiomGuard blocks executable script payloads',()=>{
+  const report=scanExtensionFiles([{path:'payload.ps1',bytes:Buffer.from("Write-Host test")}]);
+  assert.equal(report.verdict,'blocked');
+  assert.ok(report.findings.some(x=>x.rule==='blocked-file-type'));
+});
+
+test('AxiomGuard ignores documentation-only security terms',()=>{
+  const report=scanExtensionFiles([{path:'README.md',bytes:Buffer.from("Do not use require('child_process') or PowerShell -EncodedCommand in extensions.")}]);
+  assert.equal(report.verdict,'clean');
+});
