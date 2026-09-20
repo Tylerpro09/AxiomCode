@@ -2,7 +2,7 @@
 
 AxiomCode integra Scratch 3 oficial y abre proyectos `.sb3` desde **Ver → Modo Scratch (bloques)** o desde el botón de Scratch de la barra lateral.
 
-## Scratch 2.4.0 · Power Mode
+## Scratch 2.4.1 · Power Mode
 
 Esta versión convierte Modo Scratch en un entorno mucho más abierto para juegos, simulaciones, herramientas educativas y aplicaciones visuales.
 
@@ -149,7 +149,7 @@ await AxiomScratchSDK.power('storageSet', {
 
 ### Seguridad del SDK
 
-Los archivos JavaScript locales solo se cargan cuando el usuario pulsa **Extensión JS** y elige el archivo. El código no se incrusta ni se autoejecuta al abrir un `.sb3`.
+Los archivos JavaScript locales solo se cargan cuando el usuario pulsa **Extensión JS** y elige el archivo. Antes de ejecutarse pasan por **AxiomGuard**, que bloquea indicadores críticos de malware, scripts del sistema y loaders peligrosos. El código no se incrusta ni se autoejecuta al abrir un `.sb3`.
 
 Esto permite crear bloques muy avanzados sin convertir un proyecto Scratch recibido de Internet en ejecución automática de código del sistema.
 
