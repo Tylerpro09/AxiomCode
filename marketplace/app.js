@@ -6,7 +6,8 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 function card(x){
   const icon=x.icon?'<img alt="" src="'+esc(x.icon)+'">':esc((x.name||'A')[0].toUpperCase());
   const tags=(x.tags||[]).slice(0,4).map(t=>'<span class="tag">'+esc(t)+'</span>').join('');
-  return '<article class="card"><div class="card-head"><div class="icon">'+icon+'</div><div><h3>'+esc(x.name)+(x.verified?' <span class="verified" title="Verificada">◆</span>':'')+'</h3><div class="publisher">'+esc(x.publisher||'Comunidad')+'</div></div></div><p class="desc">'+esc(x.description||'Sin descripción')+'</p><div class="tags">'+tags+'</div><div class="meta"><span>v'+esc(x.version)+'</span><span>'+esc(x.id)+'</span></div></article>';
+  const guard=x.install?.security?.verdict==='clean'?'<span class="tag">AxiomGuard ✓</span>':'';
+  return '<article class="card"><div class="card-head"><div class="icon">'+icon+'</div><div><h3>'+esc(x.name)+(x.verified?' <span class="verified" title="Verificada">◆</span>':'')+'</h3><div class="publisher">'+esc(x.publisher||'Comunidad')+'</div></div></div><p class="desc">'+esc(x.description||'Sin descripción')+'</p><div class="tags">'+tags+guard+'</div><div class="meta"><span>v'+esc(x.version)+'</span><span>'+esc(x.id)+'</span></div></article>';
 }
 function render(q=''){
   const low=q.trim().toLowerCase();
@@ -58,9 +59,12 @@ $('#publishForm').addEventListener('submit',async e=>{
   try{
     const data=await api('/api/inspect',{method:'POST',body:JSON.stringify({repoUrl:$('#repoUrl').value})});
     candidate={repoUrl:$('#repoUrl').value,extension:data.extension};
-    const m=data.extension.manifest;
-    $('#preview').innerHTML='<h3>'+esc(m.name)+' <small>v'+esc(m.version)+'</small></h3><p>'+esc(m.description||'Sin descripción')+'</p><p><code>'+esc(m.id)+'</code> · '+esc(data.extension.owner+'/'+data.extension.repo)+'</p><p>Commit: <code>'+esc(data.extension.commitSha.slice(0,12))+'</code></p>';
-    $('#preview').classList.remove('hidden');$('#submitExtension').classList.remove('hidden');msg.textContent='Repositorio válido. Listo para publicar.';
+    const m=data.extension.manifest,s=data.extension.security||{};
+    const vt=s.virusTotal?.enabled?('VirusTotal: '+Number(s.virusTotal.checked||0)+' hashes comprobados'):'VirusTotal: no configurado';
+    const findings=(s.findings||[]).slice(0,3).map(x=>'<li>'+esc(x.message)+' <code>'+esc(x.file||'')+'</code></li>').join('');
+    const guard=s.verdict==='clean'?'Limpio':s.verdict==='suspicious'?'Revisar':'Bloqueado';
+    $('#preview').innerHTML='<h3>'+esc(m.name)+' <small>v'+esc(m.version)+'</small></h3><p>'+esc(m.description||'Sin descripción')+'</p><p><code>'+esc(m.id)+'</code> · '+esc(data.extension.owner+'/'+data.extension.repo)+'</p><p>Commit: <code>'+esc(data.extension.commitSha.slice(0,12))+'</code></p><p><strong>AxiomGuard:</strong> '+esc(guard)+' · '+Number(s.filesScanned||0)+' archivos analizados · puntuación '+Number(s.score||0)+'</p><p>'+esc(vt)+'</p>'+(findings?'<ul>'+findings+'</ul>':'');
+    $('#preview').classList.remove('hidden');$('#submitExtension').classList.remove('hidden');msg.textContent=s.verdict==='suspicious'?'Repositorio válido con advertencias de seguridad. Revisa los hallazgos antes de publicar.':'Repositorio válido y aprobado por AxiomGuard. Listo para publicar.';
   }catch(err){msg.className='message error';msg.textContent=err.message;}
 });
 $('#submitExtension').addEventListener('click',async()=>{
