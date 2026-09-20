@@ -49,6 +49,13 @@ La categoría **Axiom 3D** se registra automáticamente dentro del Scratch ofici
 - Consultar posición, rotación y escala por eje.
 - Comprobar si un objeto existe.
 - Consultar distancia entre objetos.
+- Asignar y modificar velocidad X/Y/Z.
+- Configurar multiplicador de gravedad por objeto.
+- Simular física con delta de tiempo, gravedad, suelo y rebote.
+- Mover un objeto hacia otro objetivo.
+- Detectar contacto/proximidad entre dos objetos.
+- Consultar velocidad por eje.
+- Cámara siguiendo un objeto con offset configurable.
 - Movimiento con colisiones por prefijo.
 - Comprobación de meta.
 - Consultar cantidad de objetos y disponibilidad de WebGL.
