@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "release-trigger/*.json"
+      - ".github/workflows/publish-local-release.yml"
 
 permissions:
   contents: write
@@ -13,52 +13,27 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Read release metadata
-        id: meta
+      - name: Download and verify installer
+        env:
+          DOWNLOAD_URL: https://now-drums-major-navigation.trycloudflare.com/AxiomCode%20Setup%200.1.0.exe
+          SHA256: cb50bdd78f8b991225950ce40a0d2d46790e68fce02039e1159b043b5716ce0f
+          ASSET_NAME: AxiomCode Setup 0.1.0.exe
         shell: bash
         run: |
-          FILE="$(ls release-trigger/*.json | head -n 1)"
-          TAG="$(jq -r '.tag' "$FILE")"
-          TITLE="$(jq -r '.title' "$FILE")"
-          URL="$(jq -r '.url' "$FILE")"
-          SHA="$(jq -r '.sha256' "$FILE")"
-          ASSET="$(jq -r '.assetName' "$FILE")"
-          NOTES="$(jq -r '.notes' "$FILE")"
-          {
-            echo "tag=$TAG"
-            echo "title=$TITLE"
-            echo "url=$URL"
-            echo "sha=$SHA"
-            echo "asset=$ASSET"
-            echo "notes<<EOF"
-            echo "$NOTES"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          curl -fL --retry 8 --retry-delay 3 --connect-timeout 20 "$DOWNLOAD_URL" -o "$ASSET_NAME"
+          echo "$SHA256  $ASSET_NAME" | sha256sum -c -
 
-      - name: Download installer
-        shell: bash
-        run: |
-          curl -fL --retry 8 --retry-delay 3 --connect-timeout 20 \
-            "${{ steps.meta.outputs.url }}" \
-            -o "${{ steps.meta.outputs.asset }}"
-          echo "${{ steps.meta.outputs.sha }}  ${{ steps.meta.outputs.asset }}" | sha256sum -c -
-
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.meta.outputs.tag }}
-          TITLE: ${{ steps.meta.outputs.title }}
-          ASSET: ${{ steps.meta.outputs.asset }}
-          NOTES: ${{ steps.meta.outputs.notes }}
+          TAG: v0.1.0
+          TITLE: AxiomCode v0.1.0
+          ASSET_NAME: AxiomCode Setup 0.1.0.exe
         shell: bash
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$ASSET" --clobber
+          NOTES='Primera versión instalable de AxiomCode para Windows. Incluye editor de código, terminal integrada, marketplace online de extensiones y Modo Scratch opcional.'
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET_NAME" --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" "$ASSET" \
-              --title "$TITLE" \
-              --notes "$NOTES" \
-              --target "$GITHUB_SHA"
+            gh release create "$TAG" "$ASSET_NAME" --repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes "$NOTES" --target "$GITHUB_SHA"
           fi
