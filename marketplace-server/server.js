@@ -17,6 +17,7 @@ const SITE_ORIGIN=process.env.SITE_ORIGIN||'*';
 const WEB_ROOT=path.resolve(__dirname,'../marketplace');
 const MAX_BODY=64*1024;
 const rate=new Map();
+let scratchReleaseCache={expires:0,value:null};
 
 function json(res,status,data,extra={}){
   res.writeHead(status,{
@@ -95,6 +96,25 @@ async function readRepoFile(owner,repo,filePath,ref){
   if(Array.isArray(data)||!data.content)throw Error(filePath+' no es un archivo');
   return Buffer.from(data.content,'base64');
 }
+async function latestBundledScratch(){
+  const now=Date.now();
+  if(scratchReleaseCache.value && scratchReleaseCache.expires>now) return scratchReleaseCache.value;
+  try{
+    const release=await gh(`/repos/${encodeURIComponent(GITHUB_OWNER)}/${encodeURIComponent(GITHUB_REPO)}/releases/latest`);
+    const tag=release.tag_name;
+    if(!tag) throw Error('Release sin tag');
+    const bytes=await readRepoFile(GITHUB_OWNER,GITHUB_REPO,'extensions/scratch-mode/extension.json',tag);
+    const manifest=validateManifest(JSON.parse(bytes.toString('utf8')));
+    const value={version:manifest.version,description:manifest.description,publisher:manifest.publisher||'AxiomCode',tag};
+    scratchReleaseCache={expires:now+10*60*1000,value};
+    return value;
+  }catch(error){
+    console.warn('scratch release metadata failed:',error.message);
+    scratchReleaseCache={expires:now+60*1000,value:null};
+    return null;
+  }
+}
+
 async function inspectRepository(repoUrl,{includeFiles=false}={}){
   const parsed=parseRepoUrl(repoUrl);
   const repo=await gh(`/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}`);
@@ -166,7 +186,12 @@ function catalogFromRows(rows){
 }
 async function readCatalog(){
   const rows=await sb('marketplace_extensions?select=*&status=eq.published&order=featured.desc,name.asc',{method:'GET'});
-  return catalogFromRows(rows);
+  const scratch=await latestBundledScratch();
+  const normalized=(rows||[]).map(row=>{
+    if(row.id!=='axiom.scratch-mode'||!scratch)return row;
+    return {...row,version:scratch.version,description:scratch.description||row.description,publisher:scratch.publisher||row.publisher,install:{kind:'bundled',bundledId:'axiom.scratch-mode'}};
+  });
+  return catalogFromRows(normalized);
 }
 async function findExtension(id){
   const rows=await sb('marketplace_extensions?select=*&id=eq.'+encodeURIComponent(id)+'&limit=1',{method:'GET'});
