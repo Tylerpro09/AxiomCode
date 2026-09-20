@@ -17,7 +17,11 @@ services:
         value: AxiomCode
       - key: SUPABASE_URL
         sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_JWKS_URL
         sync: false
       - key: GITHUB_TOKEN
         sync: false
