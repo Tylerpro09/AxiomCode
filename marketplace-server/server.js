@@ -8,6 +8,7 @@ const {Readable,Transform}=require('stream');
 const {pipeline}=require('stream/promises');
 const {URL}=require('url');
 const {scanExtensionFiles,combineSecurityReports,assertExtensionSafe,shouldInspectFile}=require('../backend/services/extensionSecurity');
+const vscodeGallery=require('./vscodeGallery');
 
 const PORT=Number(process.env.PORT||3000);
 const GITHUB_OWNER=process.env.GITHUB_OWNER||'Tylerpro09';
@@ -107,6 +108,15 @@ async function readRepoFile(owner,repo,filePath,ref){
   if(Array.isArray(data)||!data.content)throw Error(filePath+' no es un archivo');
   return Buffer.from(data.content,'base64');
 }
+async function tryReadRepoFile(owner,repo,filePath,ref){try{return await readRepoFile(owner,repo,filePath,ref)}catch(error){if(/GitHub HTTP 404/.test(error.message))return null;throw error}}
+function validateVsCodeManifest(m){
+  if(!m||typeof m!=='object')throw Error('package.json no válido');
+  if(!m.name||!m.publisher||!m.version||!m.engines?.vscode)throw Error('package.json requiere name, publisher, version y engines.vscode');
+  if(!/^[a-z0-9][a-z0-9._-]{0,99}$/i.test(String(m.name)))throw Error('name de extensión no válido');
+  if(!/^[a-z0-9][a-z0-9._-]{0,99}$/i.test(String(m.publisher)))throw Error('publisher no válido');
+  const id=String(m.publisher)+'.'+String(m.name);
+  return {id,name:String(m.displayName||m.name).slice(0,120),version:String(m.version).slice(0,40),description:String(m.description||'').slice(0,1000),publisher:String(m.publisher).slice(0,100),keywords:[...(Array.isArray(m.keywords)?m.keywords:[]),...(Array.isArray(m.categories)?m.categories:[])].map(String).slice(0,30),icon:typeof m.icon==='string'?m.icon:null,raw:m};
+}
 async function fetchRawBytes(url,maxBytes=100*1024*1024){
   const r=await fetch(url,{headers:{'User-Agent':'AxiomCode-AxiomGuard/1'},signal:AbortSignal.timeout(60000)});
   if(!r.ok)throw Error('No se pudo descargar archivo para análisis: HTTP '+r.status);
@@ -192,25 +202,47 @@ async function latestBundledScratch(){
 
 async function inspectRepository(repoUrl,{includeFiles=false}={}){
   const parsed=parseRepoUrl(repoUrl);
-  const repo=await gh(`/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}`);
+  const repo=await gh('/repos/'+encodeURIComponent(parsed.owner)+'/'+encodeURIComponent(parsed.repo));
   if(repo.private)throw Error('El repositorio debe ser público');
   const branch=repo.default_branch;
-  const manifestBytes=await readRepoFile(parsed.owner,parsed.repo,'extension.json',branch);
-  let raw;try{raw=JSON.parse(manifestBytes.toString('utf8'))}catch{throw Error('extension.json contiene JSON inválido')}
-  const manifest=validateManifest(raw);
-  const commit=await gh(`/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/commits/${encodeURIComponent(branch)}`);
+
+  let format='legacy',manifest=null,vscodeManifest=null;
+  const packageBytes=await tryReadRepoFile(parsed.owner,parsed.repo,'package.json',branch);
+  if(packageBytes){
+    try{
+      const pkg=JSON.parse(packageBytes.toString('utf8'));
+      if(pkg?.engines?.vscode&&pkg?.name&&pkg?.publisher&&pkg?.version){
+        const validated=validateVsCodeManifest(pkg);
+        format='vscode';
+        manifest=validated;
+        vscodeManifest=validated.raw;
+      }
+    }catch(error){
+      if(!/package.json requiere/.test(error.message)&&!/no válido/.test(error.message))throw Error('package.json contiene JSON inválido');
+    }
+  }
+  if(!manifest){
+    const manifestBytes=await readRepoFile(parsed.owner,parsed.repo,'extension.json',branch);
+    let raw;try{raw=JSON.parse(manifestBytes.toString('utf8'))}catch{throw Error('extension.json contiene JSON inválido')}
+    manifest=validateManifest(raw);
+  }
+
+  const commit=await gh('/repos/'+encodeURIComponent(parsed.owner)+'/'+encodeURIComponent(parsed.repo)+'/commits/'+encodeURIComponent(branch));
   const result={
-    repoUrl:parsed.url,owner:parsed.owner,repo:parsed.repo,branch,commitSha:commit.sha,
+    repoUrl:parsed.url,owner:parsed.owner,repo:parsed.repo,branch,commitSha:commit.sha,format,
     manifest:{...manifest,publisher:manifest.publisher||parsed.owner}
   };
+  if(vscodeManifest)result.vscodeManifest=vscodeManifest;
   if(!includeFiles)return result;
 
   const treeSha=commit.commit?.tree?.sha;
   if(!treeSha)throw Error('No se pudo resolver el árbol del repositorio');
-  const tree=await gh(`/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`);
+  const tree=await gh('/repos/'+encodeURIComponent(parsed.owner)+'/'+encodeURIComponent(parsed.repo)+'/git/trees/'+encodeURIComponent(treeSha)+'?recursive=1');
   if(tree.truncated)throw Error('GitHub API devolvió el árbol del repositorio truncado; no se puede publicar un paquete incompleto');
   const files=(tree.tree||[]).filter(x=>x.type==='blob'&&x.path&&!x.path.startsWith('.github/')&&!x.path.startsWith('node_modules/')&&x.path!=='.gitignore');
-  if(!files.some(x=>x.path==='extension.json'))throw Error('extension.json debe estar en la raíz');
+  const required=format==='vscode'?'package.json':'extension.json';
+  if(!files.some(x=>x.path===required))throw Error(required+' debe estar en la raíz');
+
   let total=0;
   for(const f of files){
     const size=Number(f.size||0);
@@ -218,11 +250,32 @@ async function inspectRepository(repoUrl,{includeFiles=false}={}){
     total+=size;
   }
 
-  const rawUrl=p=>'https://raw.githubusercontent.com/'+parsed.owner+'/'+parsed.repo+'/'+commit.sha+'/'+p.split('/').map(encodeURIComponent).join('/');
+  const rawUrl=x=>'https://raw.githubusercontent.com/'+parsed.owner+'/'+parsed.repo+'/'+commit.sha+'/'+x.split('/').map(encodeURIComponent).join('/');
   result.security=await scanRepositorySecurity(parsed,commit.sha,files);
   result.files=files.map(f=>({path:f.path,url:rawUrl(f.path),size:Number(f.size||0)}));
   result.icon=manifest.icon&&files.some(f=>f.path===manifest.icon)?rawUrl(manifest.icon):null;
   result.totalBytes=total;
+
+  if(format==='vscode'){
+    const byLower=new Map(files.map(f=>[String(f.path).toLowerCase(),f.path]));
+    const findOne=(...names)=>{for(const n of names){const hit=byLower.get(n.toLowerCase());if(hit)return hit}return null};
+    const readmePath=findOne('README.md','README.txt','README');
+    const changelogPath=findOne('CHANGELOG.md','CHANGELOG.txt','CHANGELOG');
+    const licensePath=findOne('LICENSE','LICENSE.md','LICENSE.txt');
+    result.vscode={
+      manifest:vscodeManifest,
+      engine:String(vscodeManifest.engines?.vscode||''),
+      web:Boolean(vscodeManifest.browser),
+      iconPath:manifest.icon||null,
+      iconUrl:result.icon,
+      readmePath,
+      readmeUrl:readmePath?rawUrl(readmePath):null,
+      changelogPath,
+      changelogUrl:changelogPath?rawUrl(changelogPath):null,
+      licensePath,
+      licenseUrl:licensePath?rawUrl(licensePath):null
+    };
+  }
   return result;
 }
 function supabaseConfig(){return {url:SUPABASE_URL,secretConfigured:Boolean(SUPABASE_SECRET_KEY),publishableConfigured:Boolean(SUPABASE_PUBLISHABLE_KEY),jwksUrl:SUPABASE_JWKS_URL||null};}
@@ -249,6 +302,7 @@ function rowToExtension(row){
     publisher:row.publisher||'Comunidad',verified:Boolean(row.verified),featured:Boolean(row.featured),
     tags:Array.isArray(row.tags)?row.tags:[],homepage:row.homepage||row.source_repo||null,
     sourceRepo:row.source_repo||null,sourceCommit:row.source_commit||null,icon:row.icon||null,
+    downloads:Number(row.downloads||0),publishedAt:row.published_at||null,updatedAt:row.updated_at||null,
     install:row.install
   };
 }
@@ -260,14 +314,27 @@ function catalogFromRows(rows){
     extensions:(rows||[]).map(rowToExtension)
   };
 }
+async function readFallbackCatalog(){
+  try{
+    const raw=JSON.parse(await fsp.readFile(path.join(WEB_ROOT,'fallback.json'),'utf8'));
+    if(raw&&Array.isArray(raw.extensions))return raw;
+  }catch(error){console.warn('fallback catalog failed:',error.message)}
+  return {schemaVersion:1,name:'AxiomCode Marketplace',generatedAt:new Date().toISOString(),extensions:[]};
+}
 async function readCatalog(){
-  const rows=await sb('marketplace_extensions?select=*&status=eq.published&order=featured.desc,name.asc',{method:'GET'});
-  const scratch=await latestBundledScratch();
-  const normalized=(rows||[]).map(row=>{
-    if(row.id!=='axiom.scratch-mode'||!scratch)return row;
-    return {...row,version:scratch.version,description:scratch.description||row.description,publisher:scratch.publisher||row.publisher,install:{kind:'bundled',bundledId:'axiom.scratch-mode'}};
-  });
-  return catalogFromRows(normalized);
+  if(!SUPABASE_URL||!SUPABASE_SECRET_KEY)return readFallbackCatalog();
+  try{
+    const rows=await sb('marketplace_extensions?select=*&status=eq.published&order=featured.desc,name.asc',{method:'GET'});
+    const scratch=await latestBundledScratch();
+    const normalized=(rows||[]).map(row=>{
+      if(row.id!=='axiom.scratch-mode'||!scratch)return row;
+      return {...row,version:scratch.version,description:scratch.description||row.description,publisher:scratch.publisher||row.publisher,install:{kind:'bundled',bundledId:'axiom.scratch-mode'}};
+    });
+    return catalogFromRows(normalized);
+  }catch(error){
+    console.warn('Supabase catalog failed, using fallback:',error.message);
+    return readFallbackCatalog();
+  }
 }
 async function findExtension(id){
   const rows=await sb('marketplace_extensions?select=*&id=eq.'+encodeURIComponent(id)+'&limit=1',{method:'GET'});
@@ -305,7 +372,9 @@ async function publishRepository(repoUrl,ipHash=''){
     source_repo:inspected.repoUrl,
     source_commit:inspected.commitSha,
     icon:inspected.icon,
-    install:{kind:'files',files:inspected.files,security:{engine:inspected.security.engine,verdict:inspected.security.verdict,score:inspected.security.score,scannedAt:new Date().toISOString(),virusTotal:inspected.security.virusTotal}},
+    install:inspected.format==='vscode'
+      ? {kind:'vscode-files',files:inspected.files,vscode:inspected.vscode,security:{engine:inspected.security.engine,verdict:inspected.security.verdict,score:inspected.security.score,scannedAt:new Date().toISOString(),virusTotal:inspected.security.virusTotal}}
+      : {kind:'files',files:inspected.files,security:{engine:inspected.security.engine,verdict:inspected.security.verdict,score:inspected.security.score,scannedAt:new Date().toISOString(),virusTotal:inspected.security.virusTotal}},
     updated_at:new Date().toISOString(),
     published_at:new Date().toISOString()
   };
@@ -318,19 +387,28 @@ async function publishRepository(repoUrl,ipHash=''){
   await recordPublication(published,inspected,ipHash);
   return published;
 }
+async function resolveReleaseCommit(tag){
+  try{
+    const c=await gh(`/repos/${encodeURIComponent(GITHUB_OWNER)}/${encodeURIComponent(GITHUB_REPO)}/commits/${encodeURIComponent(tag)}`);
+    return c?.sha||null;
+  }catch{return null}
+}
 async function latestEditorRelease(){
   try{
     const release=await gh(`/repos/${encodeURIComponent(GITHUB_OWNER)}/${encodeURIComponent(GITHUB_REPO)}/releases/latest`);
+    const tag=release.tag_name||release.name||'latest';
     return {
       available:true,
-      tag:release.tag_name||release.name||'latest',
+      tag,
       name:release.name||release.tag_name||'AxiomCode',
       publishedAt:release.published_at||null,
       url:release.html_url||null,
       notes:String(release.body||'').slice(0,5000),
+      commitSha:await resolveReleaseCommit(tag),
+      targetCommitish:release.target_commitish||null,
       assets:(release.assets||[]).map(a=>({
         name:a.name,size:a.size,downloads:a.download_count,url:a.browser_download_url,
-        contentType:a.content_type
+        contentType:a.content_type,digest:a.digest||null
       }))
     };
   }catch(error){
@@ -338,6 +416,49 @@ async function latestEditorRelease(){
     throw error;
   }
 }
+function releaseVersion(tag){
+  const value=String(tag||'').trim().replace(/^v/i,'');
+  const m=value.match(/^(\d+)\.(\d+)\.(\d+)/);
+  return m?{raw:value,major:Number(m[1]),minor:Number(m[2]),patch:Number(m[3])}:null;
+}
+function selectEditorUpdateAsset(release,platform){
+  const assets=Array.isArray(release?.assets)?release.assets:[];
+  const p=String(platform||'').toLowerCase();
+  if(p.startsWith('win32-')){
+    if(p.endsWith('-archive'))return assets.find(a=>/\.zip$/i.test(a.name||'')&&/win|windows/i.test(a.name||''))||null;
+    if(p.includes('-user')){
+      return assets.find(a=>/\.exe$/i.test(a.name||'')&&/user.?setup|setup/i.test(a.name||''))
+        ||assets.find(a=>/\.exe$/i.test(a.name||''))||null;
+    }
+    return assets.find(a=>/\.exe$/i.test(a.name||'')&&/setup/i.test(a.name||''))
+      ||assets.find(a=>/\.exe$/i.test(a.name||''))||null;
+  }
+  if(p.startsWith('darwin-'))return assets.find(a=>/\.(zip|dmg)$/i.test(a.name||'')&&/darwin|mac|osx/i.test(a.name||''))||null;
+  if(p.startsWith('linux-'))return assets.find(a=>/\.(tar\.gz|deb|rpm|appimage)$/i.test(a.name||''))||null;
+  return null;
+}
+async function editorUpdateFeed(platform,quality,currentCommit){
+  if(String(quality||'').toLowerCase()!=='stable')return null;
+  const release=await latestEditorRelease();
+  if(!release?.available)return null;
+  const ver=releaseVersion(release.tag);
+  // v0.x belongs to the legacy Electron editor and must never be installed
+  // over the Code - OSS based AxiomCode line.
+  if(!ver||ver.major<2)return null;
+  if(release.commitSha&&String(release.commitSha).toLowerCase()===String(currentCommit||'').toLowerCase())return null;
+  const asset=selectEditorUpdateAsset(release,platform);
+  if(!asset?.url)return null;
+  const digest=String(asset.digest||'');
+  const sha256hash=/^sha256:[0-9a-f]{64}$/i.test(digest)?digest.slice(7):undefined;
+  return {
+    url:asset.url,
+    version:release.commitSha||String(release.tag||'').replace(/^v/i,''),
+    productVersion:ver.raw,
+    timestamp:release.publishedAt?Date.parse(release.publishedAt):Date.now(),
+    ...(sha256hash?{sha256hash}:{})
+  };
+}
+
 function clientIp(req){return String(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').split(',')[0].trim()}
 function ipHash(req){return crypto.createHash('sha256').update(clientIp(req)+'|axiom-market').digest('hex')}
 function enforceRate(req){
@@ -365,6 +486,47 @@ async function serveStatic(req,res,u){
   fs.createReadStream(file).pipe(res);
   return true;
 }
+function publicBase(req){
+  const proto=String(req.headers['x-forwarded-proto']||'http').split(',')[0].trim();
+  const host=String(req.headers['x-forwarded-host']||req.headers.host||'localhost').split(',')[0].trim();
+  return proto+'://'+host;
+}
+async function galleryCatalogEntry(id,version){
+  const catalog=await readCatalog();
+  const entry=(catalog.extensions||[]).find(x=>String(x.id).toLowerCase()===String(id).toLowerCase());
+  if(!entry)return null;
+  if(version&&String(entry.version)!==String(version))return null;
+  return entry;
+}
+function redirect(res,url){
+  res.writeHead(302,{'Location':url,'Cache-Control':'public, max-age=300','Access-Control-Allow-Origin':SITE_ORIGIN});
+  res.end();
+}
+async function serveGalleryAsset(req,res,u,match){
+  const id=decodeURIComponent(match[1]),version=decodeURIComponent(match[2]),assetType=decodeURIComponent(match[3]);
+  const entry=await galleryCatalogEntry(id,version);
+  if(!entry||!vscodeGallery.native(entry))return json(res,404,{error:'Extensión o versión no encontrada'});
+  const v=entry.install.vscode||{};
+  if(assetType===vscodeGallery.ASSET.manifest){
+    return json(res,200,v.manifest||{});
+  }
+  if(assetType===vscodeGallery.ASSET.vsix){
+    res.writeHead(200,{
+      'Content-Type':'application/vsix',
+      'Content-Disposition':'attachment; filename="'+String(id).replace(/[^A-Za-z0-9._-]/g,'_')+'-'+String(version).replace(/[^A-Za-z0-9._-]/g,'_')+'.vsix"',
+      'Cache-Control':'public, max-age=300',
+      'Access-Control-Allow-Origin':SITE_ORIGIN
+    });
+    await vscodeGallery.streamVsix(entry,res);
+    return;
+  }
+  if(assetType===vscodeGallery.ASSET.icon&&v.iconUrl)return redirect(res,v.iconUrl);
+  if(assetType===vscodeGallery.ASSET.details&&v.readmeUrl)return redirect(res,v.readmeUrl);
+  if(assetType===vscodeGallery.ASSET.changelog&&v.changelogUrl)return redirect(res,v.changelogUrl);
+  if(assetType===vscodeGallery.ASSET.license&&v.licenseUrl)return redirect(res,v.licenseUrl);
+  return json(res,404,{error:'Asset no disponible'});
+}
+
 async function handler(req,res){
   if(req.method==='OPTIONS')return cors(res);
   const u=new URL(req.url,'http://localhost');
@@ -372,6 +534,29 @@ async function handler(req,res){
     if(req.method==='GET'&&u.pathname==='/health')return json(res,200,{ok:true,service:'axiomcode-marketplace',supabase:Boolean(SUPABASE_URL&&SUPABASE_SECRET_KEY),axiomGuard:true,virusTotal:Boolean(VIRUSTOTAL_API_KEY)});
     if(req.method==='GET'&&u.pathname==='/api/catalog')return json(res,200,await readCatalog());
     if(req.method==='GET'&&u.pathname==='/api/editor/latest')return json(res,200,await latestEditorRelease());
+    const updateMatch=u.pathname.match(/^\/api\/update\/([^/]+)\/([^/]+)\/([^/]+)$/);
+    if(req.method==='GET'&&updateMatch){
+      const update=await editorUpdateFeed(decodeURIComponent(updateMatch[1]),decodeURIComponent(updateMatch[2]),decodeURIComponent(updateMatch[3]));
+      if(!update){res.writeHead(204,{'Cache-Control':'no-store','Access-Control-Allow-Origin':SITE_ORIGIN});return res.end();}
+      return json(res,200,update,{'Cache-Control':'no-store'});
+    }
+    if(req.method==='GET'&&u.pathname==='/api/gallery/control')return json(res,200,{malicious:[],deprecated:{},search:[],unsupportedPreReleaseExtensions:{}});
+    if(req.method==='POST'&&u.pathname==='/_apis/public/gallery/extensionquery'){
+      const b=await bodyJson(req);
+      const catalog=await readCatalog();
+      return json(res,200,vscodeGallery.query(catalog,b,publicBase(req)),{'Cache-Control':'public, max-age=60'});
+    }
+    const latestMatch=u.pathname.match(/^\/_apis\/public\/gallery\/vscode\/([^/]+)\/([^/]+)\/latest$/);
+    if(req.method==='GET'&&latestMatch){
+      const id=decodeURIComponent(latestMatch[1])+'.'+decodeURIComponent(latestMatch[2]);
+      const entry=await galleryCatalogEntry(id);
+      if(!entry||!vscodeGallery.native(entry))return json(res,404,{error:'Extensión no encontrada'});
+      return json(res,200,vscodeGallery.toRawGalleryExtension(entry,publicBase(req)),{'Cache-Control':'public, max-age=60'});
+    }
+    const assetMatch=u.pathname.match(/^\/_apis\/public\/gallery\/assets\/([^/]+)\/([^/]+)\/(.+)$/);
+    if(req.method==='GET'&&assetMatch)return serveGalleryAsset(req,res,u,assetMatch);
+    const statsMatch=u.pathname.match(/^\/_apis\/public\/gallery\/publishers\/([^/]+)\/extensions\/([^/]+)\/([^/]+)\/stats$/);
+    if((req.method==='GET'||req.method==='POST')&&statsMatch){res.writeHead(204,{'Access-Control-Allow-Origin':SITE_ORIGIN});return res.end();}
     if(req.method==='POST'&&u.pathname==='/api/inspect'){
       const b=await bodyJson(req);
       const inspected=await inspectRepository(b.repoUrl,{includeFiles:true});
