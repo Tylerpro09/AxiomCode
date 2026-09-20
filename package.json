@@ -1,6 +1,6 @@
 {
   "name": "axiomcode",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "AxiomCode - advanced desktop code editor",
   "main": "main.js",
   "scripts": {
@@ -13,6 +13,7 @@
     "test:scratch:smoke": "electron scripts/smoke-scratch.cjs",
     "test:scratch:official": "electron scripts/smoke-scratch-official.cjs",
     "test:scratch:3d": "electron scripts/smoke-scratch-3d.cjs",
+    "test:scratch:power": "electron scripts/smoke-scratch-power.cjs",
     "test:scratch:optional": "electron scripts/smoke-optional-scratch.cjs",
     "test:marketplace": "node --test scripts/test-marketplace.cjs"
   },
