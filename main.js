@@ -1,7 +1,10 @@
-﻿const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+﻿const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Notification } = require('electron');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
+const os = require('os');
+const dns = require('dns').promises;
+const net = require('net');
 const { exec, spawn } = require('child_process');
 const { Transform, Readable } = require('stream');
 const { pipeline } = require('stream/promises');
@@ -10,6 +13,157 @@ let scratchCore;
 const SCRATCH_EXTENSION_ID = 'axiom.scratch-mode';
 const MAX_AXIOM_SCRATCH_BYTES = 100 * 1024 * 1024;
 const MAX_SB3_BYTES = 512 * 1024 * 1024;
+const SCRATCH_POWER_STORAGE_MAX_BYTES = 10 * 1024 * 1024;
+const SCRATCH_POWER_HTTP_MAX_BYTES = 20 * 1024 * 1024;
+let scratchClipboardReadAllowed = false;
+
+function isPrivateIp(address) {
+  if (!address) return true;
+  const ip = String(address).toLowerCase();
+  if (net.isIPv4(ip)) {
+    const p = ip.split('.').map(Number);
+    if (p[0] === 10 || p[0] === 127 || p[0] === 0) return true;
+    if (p[0] === 169 && p[1] === 254) return true;
+    if (p[0] === 192 && p[1] === 168) return true;
+    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
+    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true;
+    if (p[0] >= 224) return true;
+    return false;
+  }
+  if (net.isIPv6(ip)) {
+    if (ip === '::1' || ip === '::') return true;
+    if (ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe8') || ip.startsWith('fe9') || ip.startsWith('fea') || ip.startsWith('feb')) return true;
+    if (ip.startsWith('::ffff:')) return isPrivateIp(ip.slice(7));
+    return false;
+  }
+  return true;
+}
+async function assertSafeScratchUrl(raw) {
+  let url;
+  try { url = new URL(String(raw || '')); } catch { throw new Error('URL no válida'); }
+  if (url.protocol !== 'https:') throw new Error('Axiom Power solo permite HTTPS');
+  const host = url.hostname.toLowerCase();
+  if (!host || host === 'localhost' || host.endsWith('.local')) throw new Error('Host local bloqueado');
+  const resolved = await dns.lookup(host, {all:true, verbatim:true});
+  if (!resolved.length || resolved.some(x => isPrivateIp(x.address))) throw new Error('Dirección privada o local bloqueada');
+  return url;
+}
+async function scratchPowerFetch(rawUrl, method='GET', body='') {
+  let url = await assertSafeScratchUrl(rawUrl);
+  method = String(method || 'GET').toUpperCase();
+  if (!['GET','POST'].includes(method)) throw new Error('Método HTTP no permitido');
+  for (let hop=0; hop<6; hop++) {
+    const response = await fetch(url, {
+      method,
+      headers:{'User-Agent':'AxiomCode-Scratch-Power/'+app.getVersion(),'Accept':'*/*', ...(method==='POST'?{'Content-Type':'text/plain; charset=utf-8'}:{})},
+      body: method==='POST' ? String(body ?? '').slice(0,2*1024*1024) : undefined,
+      redirect:'manual',
+      signal:AbortSignal.timeout(20000)
+    });
+    if ([301,302,303,307,308].includes(response.status)) {
+      const location=response.headers.get('location');
+      if(!location) throw new Error('Redirección HTTP sin destino');
+      url=await assertSafeScratchUrl(new URL(location,url).href);
+      if(response.status===303) method='GET';
+      continue;
+    }
+    const reader=response.body?.getReader();
+    const chunks=[]; let total=0;
+    if(reader){
+      while(true){
+        const {done,value}=await reader.read();
+        if(done) break;
+        total+=value.byteLength;
+        if(total>SCRATCH_POWER_HTTP_MAX_BYTES){reader.cancel().catch(()=>{});throw new Error('Respuesta web supera 20 MiB');}
+        chunks.push(Buffer.from(value));
+      }
+    }
+    const text=Buffer.concat(chunks).toString('utf8');
+    return {status:response.status,ok:response.ok,url:url.href,text};
+  }
+  throw new Error('Demasiadas redirecciones');
+}
+function scratchPowerStoragePath(){ return path.join(app.getPath('userData'),'scratch-power-storage.json'); }
+async function readScratchPowerStorage(){
+  try{
+    const raw=await fsp.readFile(scratchPowerStoragePath(),'utf8');
+    const obj=JSON.parse(raw);
+    return obj && typeof obj==='object' && !Array.isArray(obj) ? obj : {};
+  }catch{return {};}
+}
+async function writeScratchPowerStorage(data){
+  const raw=JSON.stringify(data);
+  if(Buffer.byteLength(raw)>SCRATCH_POWER_STORAGE_MAX_BYTES) throw new Error('Almacenamiento Axiom Power supera 10 MiB');
+  const target=scratchPowerStoragePath(), tmp=target+'.tmp';
+  await fsp.mkdir(path.dirname(target),{recursive:true});
+  await fsp.writeFile(tmp,raw,'utf8');
+  await fsp.rm(target,{force:true}).catch(()=>{});
+  await fsp.rename(tmp,target);
+}
+async function scratchPower(op,args={}) {
+  await requireScratchInstalled();
+  op=String(op||'');
+  if(op==='systemInfo') return {
+    platform:process.platform, arch:process.arch, release:os.release(),
+    cpus:os.cpus().length, memoryMB:Math.round(os.totalmem()/1024/1024),
+    language:app.getLocale(), appVersion:app.getVersion()
+  };
+  if(op==='httpGet') return scratchPowerFetch(args.url,'GET');
+  if(op==='httpPost') return scratchPowerFetch(args.url,'POST',args.body);
+  if(op==='storageGet'){ const s=await readScratchPowerStorage(); return String(s[String(args.key||'')] ?? ''); }
+  if(op==='storageSet'){
+    const s=await readScratchPowerStorage(), key=String(args.key||'').slice(0,200), value=String(args.value??'');
+    if(!key) throw new Error('Clave vacía'); if(Buffer.byteLength(value)>1024*1024) throw new Error('Valor supera 1 MiB');
+    if(!Object.hasOwn(s,key) && Object.keys(s).length>=1024) throw new Error('Máximo 1024 claves');
+    s[key]=value; await writeScratchPowerStorage(s); return true;
+  }
+  if(op==='storageDelete'){ const s=await readScratchPowerStorage(); delete s[String(args.key||'')]; await writeScratchPowerStorage(s); return true; }
+  if(op==='storageKeys'){ const s=await readScratchPowerStorage(); return JSON.stringify(Object.keys(s)); }
+  if(op==='openTextFile'){
+    const result=await dialog.showOpenDialog(mainWindow,{title:'Scratch · Abrir archivo de texto',properties:['openFile'],filters:[{name:'Texto y datos',extensions:['txt','json','csv','md','xml','html','css','js','py']},{name:'Todos los archivos',extensions:['*']}]});
+    if(result.canceled) return '';
+    const p=result.filePaths[0], st=await fsp.stat(p); if(st.size>20*1024*1024) throw new Error('Archivo supera 20 MiB');
+    return await fsp.readFile(p,'utf8');
+  }
+  if(op==='saveTextFile'){
+    const suggested=String(args.name||'scratch.txt').replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,120)||'scratch.txt';
+    const result=await dialog.showSaveDialog(mainWindow,{title:'Scratch · Guardar archivo de texto',defaultPath:suggested,filters:[{name:'Texto',extensions:['txt']},{name:'JSON',extensions:['json']},{name:'Todos los archivos',extensions:['*']}]});
+    if(result.canceled) return false;
+    const text=String(args.text??''); if(Buffer.byteLength(text)>20*1024*1024) throw new Error('Contenido supera 20 MiB');
+    await fsp.writeFile(result.filePath,text,'utf8'); return true;
+  }
+  if(op==='savePng'){
+    const raw=String(args.dataUrl||'');
+    const match=/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(raw);
+    if(!match) throw new Error('Imagen PNG no válida');
+    const bytes=Buffer.from(match[1],'base64'); if(bytes.length>50*1024*1024) throw new Error('Captura supera 50 MiB');
+    const suggested=String(args.name||'escenario.png').replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,120)||'escenario.png';
+    const result=await dialog.showSaveDialog(mainWindow,{title:'Scratch · Guardar captura del escenario',defaultPath:suggested,filters:[{name:'PNG',extensions:['png']}]});
+    if(result.canceled) return false;
+    await fsp.writeFile(result.filePath,bytes); return true;
+  }
+  if(op==='clipboardWrite'){ clipboard.writeText(String(args.text??'')); return true; }
+  if(op==='clipboardRead'){
+    if(!scratchClipboardReadAllowed){
+      const choice=dialog.showMessageBoxSync(mainWindow,{type:'warning',title:'Scratch quiere leer el portapapeles',message:'Un proyecto Scratch solicitó acceso de lectura al portapapeles.',detail:'Permitirlo puede revelar texto que copiaste desde otra aplicación. La autorización durará hasta cerrar AxiomCode.',buttons:['Cancelar','Permitir esta sesión'],defaultId:0,cancelId:0,noLink:true});
+      if(choice!==1) throw new Error('Acceso al portapapeles cancelado');
+      scratchClipboardReadAllowed=true;
+    }
+    return clipboard.readText().slice(0,1024*1024);
+  }
+  if(op==='openUrl'){
+    const url=await assertSafeScratchUrl(args.url);
+    const choice=dialog.showMessageBoxSync(mainWindow,{type:'question',title:'Scratch quiere abrir un enlace',message:'¿Abrir este enlace en el navegador?',detail:url.href,buttons:['Cancelar','Abrir'],defaultId:0,cancelId:0,noLink:true});
+    if(choice!==1) return false;
+    const err=await shell.openExternal(url.href); if(err) throw new Error(err); return true;
+  }
+  if(op==='notify'){
+    const title=String(args.title||'Scratch').slice(0,80), body=String(args.body||'').slice(0,500);
+    if(Notification.isSupported()) new Notification({title,body}).show(); else dialog.showMessageBox(mainWindow,{type:'info',title,message:body});
+    return true;
+  }
+  throw new Error('Operación Axiom Power no válida');
+}
 ipcMain.handle('scratch:open', async () => {
   await requireScratchInstalled();
   const result = await dialog.showOpenDialog(mainWindow, { title: 'Abrir proyecto de bloques', filters: [{ name: 'Axiom Scratch', extensions: ['axiomscratch'] }], properties: ['openFile'] });
@@ -125,6 +279,15 @@ ipcMain.on('scratch:confirmDiscard', event => {
   event.returnValue = dialog.showMessageBoxSync(mainWindow, {type:'question',title:'Cambios sin guardar en Scratch',message:'Hay cambios sin guardar en el proyecto de bloques.',detail:'Guarda el proyecto antes de continuar si quieres conservar los cambios.',buttons:['Cancelar','Descartar cambios'],defaultId:0,cancelId:0,noLink:true}) === 1;
 });
 ipcMain.handle('scratch:info', async () => ({url:(await ensureScratchService()).url}));
+ipcMain.handle('scratch:power', async (_, op, args) => scratchPower(op,args));
+ipcMain.handle('scratch:openExtensionJs', async () => {
+  await requireScratchInstalled();
+  const result=await dialog.showOpenDialog(mainWindow,{title:'Scratch · Cargar extensión JavaScript local',properties:['openFile'],filters:[{name:'Extensión JavaScript',extensions:['js']}]});
+  if(result.canceled) return null;
+  const filePath=result.filePaths[0], st=await fsp.stat(filePath);
+  if(st.size>2*1024*1024) throw new Error('La extensión JavaScript supera 2 MiB');
+  return {name:path.basename(filePath),code:await fsp.readFile(filePath,'utf8')};
+});
 ipcMain.handle('scratch:openSb3', async (_, requestedPath) => {
   await requireScratchInstalled();
   let filePath = requestedPath;
