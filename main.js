@@ -321,7 +321,7 @@ ipcMain.handle('scratch:saveSb3', async (_, data) => {
   return filePath;
 });
 function createWindow() {
-  mainWindow = new BrowserWindow({ width: 1500, height: 920, minWidth: 980, minHeight: 640, backgroundColor: '#1f1f1f', title: 'AxiomCode', autoHideMenuBar: true, titleBarStyle: 'hidden', titleBarOverlay: { color: '#181818', symbolColor: '#cccccc', height: 35 }, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
+  mainWindow = new BrowserWindow({ width: 1500, height: 920, minWidth: 980, minHeight: 640, backgroundColor: '#1f1f1f', title: 'AxiomCode', icon: path.join(__dirname,'assets','branding','axiomcode-icon.png'), autoHideMenuBar: true, titleBarStyle: 'hidden', titleBarOverlay: { color: '#181818', symbolColor: '#cccccc', height: 35 }, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
   mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'), {query:process.argv.includes('--scratch') ? {scratch:'1'} : {}});
 }
 async function tree(dir, depth = 0) {
@@ -365,8 +365,51 @@ ipcMain.handle('app:info',()=>({name:'AxiomCode',version:app.getVersion(),platfo
 ipcMain.handle('app:update:check',async()=>fetchLatestUpdate());
 ipcMain.handle('app:update:install',async()=>downloadAndLaunchUpdate(cachedUpdate?.available?cachedUpdate:await fetchLatestUpdate()));
 ipcMain.handle('config:getAll',()=>backend.configuration.getAll());
+ipcMain.handle('config:getDefaults',()=>backend.configuration.getDefaults());
 ipcMain.handle('config:get',(_,key)=>backend.configuration.get(key));
 ipcMain.handle('config:set',(_,key,value)=>backend.configuration.set(key,value));
+ipcMain.handle('config:setMany',(_,values)=>backend.configuration.setMany(values));
+ipcMain.handle('config:reload',()=>backend.configuration.reload());
+ipcMain.handle('config:reset',()=>backend.configuration.reset());
+ipcMain.handle('config:path',async()=>{await backend.configuration.load();return backend.configuration.file;});
+ipcMain.handle('preferences:resource',async(_,name)=>{
+  const allowed={snippets:'snippets.json'};
+  const fileName=allowed[String(name||'')];
+  if(!fileName)throw new Error('Recurso de preferencias no válido');
+  const target=path.join(app.getPath('userData'),fileName);
+  try{await fsp.access(target);}catch{await fsp.writeFile(target,'{}\n','utf8');}
+  return target;
+});
+ipcMain.handle('preferences:export',async()=>{
+  const result=await dialog.showSaveDialog(mainWindow,{
+    title:'AxiomCode · Exportar perfil y configuración',
+    defaultPath:'AxiomCode-Preferences.json',
+    filters:[{name:'AxiomCode Preferences',extensions:['json']}]
+  });
+  if(result.canceled)return null;
+  const bundle={
+    schemaVersion:1,
+    app:'AxiomCode',
+    exportedAt:new Date().toISOString(),
+    settings:await backend.configuration.getAll(),
+    extensions:await backend.extensions.readState()
+  };
+  await fsp.writeFile(result.filePath,JSON.stringify(bundle,null,2),'utf8');
+  return result.filePath;
+});
+ipcMain.handle('preferences:import',async()=>{
+  const result=await dialog.showOpenDialog(mainWindow,{
+    title:'AxiomCode · Importar perfil y configuración',
+    properties:['openFile'],
+    filters:[{name:'AxiomCode Preferences',extensions:['json']}]
+  });
+  if(result.canceled)return null;
+  const bundle=JSON.parse(await fsp.readFile(result.filePaths[0],'utf8'));
+  if(bundle?.schemaVersion!==1||bundle?.app!=='AxiomCode'||!bundle.settings)throw new Error('Archivo de preferencias AxiomCode no válido');
+  await backend.configuration.replaceAll(bundle.settings);
+  if(bundle.extensions&&typeof bundle.extensions==='object')await backend.extensions.writeState(bundle.extensions);
+  return {path:result.filePaths[0],settings:await backend.configuration.getAll()};
+});
 ipcMain.handle('extensions:list',()=>backend.extensions.list());
 ipcMain.handle('extensions:marketplace',(_,force=false)=>backend.extensions.marketplace(Boolean(force)));
 ipcMain.handle('extensions:update',async(_,id)=>backend.extensions.update(id));
