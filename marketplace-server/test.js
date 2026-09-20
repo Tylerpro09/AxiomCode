@@ -1,6 +1,6 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {parseRepoUrl,validateManifest,compareVersions}=require('./server');
+const {parseRepoUrl,validateManifest,compareVersions,supabaseConfig}=require('./server');
 
 test('parse GitHub repository URL',()=>{
   assert.deepEqual(parseRepoUrl('https://github.com/user/repo.git'),{owner:'user',repo:'repo',url:'https://github.com/user/repo'});
@@ -15,4 +15,10 @@ test('compare versions',()=>{
   assert.equal(compareVersions('1.2.0','1.1.9'),1);
   assert.equal(compareVersions('1.0.0','1.0.0'),0);
   assert.equal(compareVersions('1.0.0-beta','1.0.0'),-1);
+});
+
+test('Supabase configuration uses server secret variable',()=>{
+  const cfg=supabaseConfig();
+  assert.equal(typeof cfg.secretConfigured,'boolean');
+  assert.equal(typeof cfg.publishableConfigured,'boolean');
 });
