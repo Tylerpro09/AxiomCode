@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: axiomcode-marketplace
+    runtime: node
+    plan: free
+    rootDir: marketplace-server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: GITHUB_OWNER
+        value: Tylerpro09
+      - key: GITHUB_REPO
+        value: AxiomCode
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
