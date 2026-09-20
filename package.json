@@ -1,0 +1,62 @@
+{
+  "name": "axiomcode",
+  "version": "0.1.1",
+  "description": "AxiomCode - advanced desktop code editor",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "postinstall": "node scripts/ensure-electron.cjs",
+    "test:scratch": "node --test scripts/test-scratch.cjs",
+    "test:scratch:smoke": "electron scripts/smoke-scratch.cjs",
+    "test:scratch:official": "electron scripts/smoke-scratch-official.cjs",
+    "test:scratch:3d": "electron scripts/smoke-scratch-3d.cjs",
+    "test:scratch:optional": "electron scripts/smoke-optional-scratch.cjs",
+    "test:marketplace": "node --test scripts/test-marketplace.cjs"
+  },
+  "author": "AxiomCode",
+  "license": "MIT",
+  "dependencies": {
+    "@vscode/codicons": "^0.0.46-24",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "material-icon-theme": "^5.38.1",
+    "monaco-editor": "^0.52.2",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
+    "electron": "^38.8.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.axiomcode.editor",
+    "productName": "AxiomCode",
+    "win": {
+      "target": "nsis"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "backend/**/*",
+      "marketplace/fallback.json",
+      "extensions/**/*",
+      "licenses/**/*",
+      "CODE_OSS_INTEGRATION.md",
+      "node_modules/monaco-editor/**/*",
+      "node_modules/material-icon-theme/**/*",
+      "package.json",
+      "node_modules/@vscode/codicons/**/*",
+      "node_modules/@xterm/xterm/**/*",
+      "node_modules/@xterm/addon-fit/**/*",
+      "node_modules/node-pty/**/*"
+    ]
+  },
+  "allowScripts": {
+    "electron@38.8.6": true,
+    "node-pty@1.1.0": true
+  }
+}
