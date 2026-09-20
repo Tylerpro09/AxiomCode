@@ -1,0 +1,64 @@
+name: Publish AxiomCode Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "release-trigger/*.json"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read release metadata
+        id: meta
+        shell: bash
+        run: |
+          FILE="$(ls release-trigger/*.json | head -n 1)"
+          TAG="$(jq -r '.tag' "$FILE")"
+          TITLE="$(jq -r '.title' "$FILE")"
+          URL="$(jq -r '.url' "$FILE")"
+          SHA="$(jq -r '.sha256' "$FILE")"
+          ASSET="$(jq -r '.assetName' "$FILE")"
+          NOTES="$(jq -r '.notes' "$FILE")"
+          {
+            echo "tag=$TAG"
+            echo "title=$TITLE"
+            echo "url=$URL"
+            echo "sha=$SHA"
+            echo "asset=$ASSET"
+            echo "notes<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download installer
+        shell: bash
+        run: |
+          curl -fL --retry 8 --retry-delay 3 --connect-timeout 20 \
+            "${{ steps.meta.outputs.url }}" \
+            -o "${{ steps.meta.outputs.asset }}"
+          echo "${{ steps.meta.outputs.sha }}  ${{ steps.meta.outputs.asset }}" | sha256sum -c -
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          TITLE: ${{ steps.meta.outputs.title }}
+          ASSET: ${{ steps.meta.outputs.asset }}
+          NOTES: ${{ steps.meta.outputs.notes }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --clobber
+          else
+            gh release create "$TAG" "$ASSET" \
+              --title "$TITLE" \
+              --notes "$NOTES" \
+              --target "$GITHUB_SHA"
+          fi
