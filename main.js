@@ -8,12 +8,14 @@ const { pipeline } = require('stream/promises');
 const { createBackend } = require('./backend');
 let scratchCore;
 const SCRATCH_EXTENSION_ID = 'axiom.scratch-mode';
+const MAX_AXIOM_SCRATCH_BYTES = 100 * 1024 * 1024;
+const MAX_SB3_BYTES = 512 * 1024 * 1024;
 ipcMain.handle('scratch:open', async () => {
   await requireScratchInstalled();
   const result = await dialog.showOpenDialog(mainWindow, { title: 'Abrir proyecto de bloques', filters: [{ name: 'Axiom Scratch', extensions: ['axiomscratch'] }], properties: ['openFile'] });
   if (result.canceled) return null;
   const filePath = result.filePaths[0];
-  if ((await fsp.stat(filePath)).size > 2_000_000) throw new Error('El proyecto supera los 2 MB');
+  if ((await fsp.stat(filePath)).size > MAX_AXIOM_SCRATCH_BYTES) throw new Error('El proyecto supera los 100 MiB');
   const content = await fsp.readFile(filePath, 'utf8');
   scratchCore.validate(JSON.parse(content));
   return { path: filePath, content };
@@ -132,12 +134,12 @@ ipcMain.handle('scratch:openSb3', async (_, requestedPath) => {
     filePath = result.filePaths[0];
   }
   if (typeof filePath !== 'string' || !/\.(sb3|sb2|sb)$/i.test(filePath)) throw new Error('Selecciona un archivo Scratch');
-  if ((await fsp.stat(filePath)).size > 100_000_000) throw new Error('El proyecto supera los 100 MB');
+  if ((await fsp.stat(filePath)).size > MAX_SB3_BYTES) throw new Error('El proyecto supera los 512 MiB');
   return {path:filePath,bytes:new Uint8Array(await fsp.readFile(filePath))};
 });
 ipcMain.handle('scratch:saveSb3', async (_, data) => {
   await requireScratchInstalled();
-  if (!(data.bytes instanceof Uint8Array) || data.bytes.length > 100_000_000 || data.bytes[0] !== 80 || data.bytes[1] !== 75) throw new Error('Proyecto .sb3 no válido');
+  if (!(data.bytes instanceof Uint8Array) || data.bytes.length > MAX_SB3_BYTES || data.bytes[0] !== 80 || data.bytes[1] !== 75) throw new Error('Proyecto .sb3 no válido o supera 512 MiB');
   let filePath = data.path;
   if (!filePath) {
     const title = String(data.title || 'Mi proyecto').replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,100);
