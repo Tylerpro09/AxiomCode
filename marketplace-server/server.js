@@ -113,17 +113,15 @@ async function inspectRepository(repoUrl,{includeFiles=false}={}){
   const treeSha=commit.commit?.tree?.sha;
   if(!treeSha)throw Error('No se pudo resolver el árbol del repositorio');
   const tree=await gh(`/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`);
-  if(tree.truncated)throw Error('El repositorio es demasiado grande');
+  if(tree.truncated)throw Error('GitHub API devolvió el árbol del repositorio truncado; no se puede publicar un paquete incompleto');
   const files=(tree.tree||[]).filter(x=>x.type==='blob'&&x.path&&!x.path.startsWith('.github/')&&!x.path.startsWith('node_modules/')&&x.path!=='.gitignore');
   if(!files.some(x=>x.path==='extension.json'))throw Error('extension.json debe estar en la raíz');
-  if(files.length>100)throw Error('La extensión supera 100 archivos');
   let total=0;
   for(const f of files){
     const size=Number(f.size||0);
-    if(size>20_000_000)throw Error('Archivo mayor de 20 MB: '+f.path);
+    if(size>100*1024*1024)throw Error('GitHub no permite objetos Git normales mayores de 100 MiB: '+f.path);
     total+=size;
   }
-  if(total>80_000_000)throw Error('La extensión supera 80 MB');
 
   const rawUrl=p=>'https://raw.githubusercontent.com/'+parsed.owner+'/'+parsed.repo+'/'+commit.sha+'/'+p.split('/').map(encodeURIComponent).join('/');
   result.files=files.map(f=>({path:f.path,url:rawUrl(f.path),size:Number(f.size||0)}));
