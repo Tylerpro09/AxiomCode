@@ -92,7 +92,7 @@ async function renderExtensions(host){
    for(const x of locals)map.set(x.id,{...x,installedVersion:x.installed?x.version:null,online:false});
    for(const x of market.extensions||[]){
      const local=map.get(x.id);
-     map.set(x.id,{...(local||{}),...x,installed:Boolean(local?.installed||x.installed),installedVersion:local?.installed?local.version:(x.installedVersion||null),online:true});
+     map.set(x.id,{...(local||{}),...x,installed:Boolean(local?.installed||x.installed),installedVersion:local?.installed?local.version:(x.installedVersion||null),security:local?.security||x.install?.security||null,online:true});
    }
    return [...map.values()];
  };
