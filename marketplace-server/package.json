@@ -1,12 +1,17 @@
 {
-  "name":"axiomcode-marketplace-api",
-  "version":"1.0.0",
-  "private":true,
-  "description":"Render API for AxiomCode Marketplace",
-  "main":"server.js",
-  "scripts":{
-    "start":"node server.js",
-    "test":"node --test test.js"
+  "name": "axiomcode-marketplace-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Render API for AxiomCode Marketplace",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test.js"
   },
-  "engines":{"node":">=20"}
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "yazl": "^3.3.1"
+  }
 }
