@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Seguridad y análisis antimalware de extensiones.">
+<title>AxiomGuard · AxiomCode Docs</title>
+<link rel="stylesheet" href="../style.css?v=20260920-4">
+</head>
+<body>
+<header class="top"><a class="brand" href="../"><span>A</span>AxiomCode Marketplace</a><nav class="top-nav"><a href="../#editor">Editor</a><a href="../#extensions">Extensiones</a><a href="../docs.html" class="active">Documentación</a><a href="../#publish">Publicar</a><a class="github" href="https://github.com/Tylerpro09/AxiomCode">GitHub</a></nav></header>
+<main class="docs-page"><section class="docs-hero docs-hero-compact"><p class="eyebrow">DOCUMENTACIÓN · AXIOMGUARD</p><h1>AxiomGuard</h1><p>Seguridad y análisis antimalware de extensiones.</p></section><div class="docs-layout"><aside class="docs-nav"><strong>Documentación</strong><a href="quickstart.html">Inicio rápido</a><a href="structure.html">Estructura</a><a href="manifest.html">extension.json</a><a href="rules.html">Reglas y límites</a><a href="security.html" class="active">AxiomGuard</a><a href="external-editors.html">Otros editores</a><a href="publish-flow.html">Publicación</a><a href="updates.html">Actualizar</a><a href="errors.html">Errores comunes</a><a href="../docs.html">← Índice</a></aside><article class="docs-content"><section id="security" class="doc-section">
+  <h2>AxiomGuard · seguridad de extensiones</h2>
+  <p>Toda extensión de comunidad se analiza antes de publicarse y vuelve a analizarse en el equipo del usuario antes de instalarse. El análisis local es obligatorio; VirusTotal puede aportar reputación adicional cuando el servidor tiene una API key configurada.</p>
+  <ul class="rules">
+    <li>Bloquea ejecución directa de procesos del sistema mediante <code>child_process</code> y bypasses equivalentes.</li>
+    <li>Bloquea PowerShell ofuscado, loaders remotos, mecanismos de persistencia y patrones de evasión de antivirus.</li>
+    <li>Detecta patrones asociados a robo de credenciales, wallets, minería de criptomonedas y exfiltración.</li>
+    <li>Bloquea binarios y scripts del sistema como <code>.exe</code>, <code>.dll</code>, <code>.msi</code>, <code>.ps1</code>, <code>.bat</code>, <code>.cmd</code>, <code>.vbs</code>, <code>.hta</code>, <code>.jar</code>, <code>.node</code> y <code>.sh</code> dentro de extensiones normales.</li>
+    <li>Calcula SHA-256 de los archivos inspeccionados y conserva el estado de seguridad de la instalación.</li>
+    <li>Las extensiones copiadas manualmente a la carpeta local también son analizadas; una extensión bloqueada no se activa.</li>
+    <li>Las extensiones JavaScript locales de Scratch Power Mode pasan por AxiomGuard antes de ejecutarse.</li>
+  </ul>
+  <div class="callout"><strong>Importante:</strong> ningún análisis estático o antivirus garantiza detectar el 100% del malware. AxiomGuard usa varias capas para reducir el riesgo y aplica bloqueo preventivo cuando encuentra indicadores críticos.</div>
+</section><div class="docs-pagination"><a href="rules.html">← Reglas y límites</a><a href="external-editors.html">Otros editores →</a></div></article></div></main>
+<footer><span>AxiomCode Marketplace</span><span>Documentación de extensiones</span></footer>
+</body>
+</html>
