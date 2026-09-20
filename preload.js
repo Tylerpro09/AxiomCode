@@ -1,6 +1,8 @@
 ﻿const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('axiom', {
   scratchInfo: () => ipcRenderer.invoke('scratch:info'),
+  scratchPower: (op, args = {}) => ipcRenderer.invoke('scratch:power', op, args),
+  openScratchExtensionJs: () => ipcRenderer.invoke('scratch:openExtensionJs'),
   confirmScratchDiscard: () => ipcRenderer.sendSync('scratch:confirmDiscard'),
   openScratchSb3: path => ipcRenderer.invoke('scratch:openSb3', path),
   saveScratchSb3: data => ipcRenderer.invoke('scratch:saveSb3', data),
