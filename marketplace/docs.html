@@ -106,9 +106,9 @@
   <ul class="rules">
     <li>El repositorio debe ser <strong>público</strong> y estar en <strong>GitHub</strong>.</li>
     <li><code>extension.json</code> debe existir en la raíz.</li>
-    <li>Máximo <strong>100 archivos</strong> por extensión.</li>
-    <li>Máximo <strong>20 MB por archivo</strong>.</li>
-    <li>Máximo <strong>80 MB en total</strong> por extensión.</li>
+    <li><strong>Sin límite propio de cantidad de archivos</strong> impuesto por AxiomCode.</li>
+    <li>Máximo <strong>100 MiB por archivo Git normal</strong>, porque GitHub bloquea objetos mayores.</li>
+    <li><strong>Sin límite total propio</strong> de tamaño impuesto por AxiomCode. GitHub recomienda mantener el tamaño en disco de <code>.git</code> dentro de 10 GB para rendimiento y aplica un máximo de 2 GiB por push.</li>
     <li>El ID debe coincidir con <code>^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$</code>.</li>
     <li>Una vez que un ID se publica desde un repositorio, otro repositorio no puede apropiarse de ese mismo ID.</li>
     <li>Los IDs reservados por AxiomCode no pueden ser usados por extensiones de la comunidad.</li>
@@ -121,7 +121,7 @@
   <ol class="steps compact">
     <li><strong>Inspección.</strong><span>Render consulta GitHub y valida el manifiesto.</span></li>
     <li><strong>Commit congelado.</strong><span>La publicación queda asociada al SHA del commit actual, para que el paquete no cambie silenciosamente.</span></li>
-    <li><strong>Validación del paquete.</strong><span>Se comprueban número de archivos y límites de tamaño.</span></li>
+    <li><strong>Validación del paquete.</strong><span>Se respetan los límites que GitHub aplica al repositorio y se rechazan árboles truncados por la API de GitHub.</span></li>
     <li><strong>Registro.</strong><span>La extensión se guarda en Supabase y aparece en <code>/api/catalog</code>.</span></li>
     <li><strong>Instalación.</strong><span>AxiomCode descarga los archivos por HTTPS y vuelve a validar ID y versión antes de instalar.</span></li>
   </ol>
@@ -146,7 +146,7 @@
     <details><summary>“extension.json requiere id, name y version”</summary><p>Falta uno de los tres campos obligatorios o el archivo no contiene JSON válido.</p></details>
     <details><summary>“Ese ID ya pertenece a otro repositorio”</summary><p>Ese identificador ya fue publicado desde otra URL de GitHub. Usa el repositorio original o un ID diferente.</p></details>
     <details><summary>“Publica una versión mayor que…”</summary><p>Incrementa el valor de <code>version</code> antes de volver a publicar.</p></details>
-    <details><summary>“La extensión supera 100 archivos / 80 MB”</summary><p>Reduce el paquete. No incluyas dependencias innecesarias, builds temporales ni archivos grandes que no necesite la extensión.</p></details>
+    <details><summary>“GitHub no permite objetos Git normales mayores de 100 MiB”</summary><p>Ese archivo supera el límite aplicado por GitHub para un objeto Git normal. Reduce su tamaño o usa un mecanismo de distribución apropiado para archivos grandes.</p></details>
     <details><summary>“El repositorio debe ser público”</summary><p>Cambia la visibilidad del repositorio a pública antes de enviarlo a la marketplace.</p></details>
   </div>
 </section>
