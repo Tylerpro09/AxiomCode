@@ -37,6 +37,7 @@
   <a href="#structure">Estructura</a>
   <a href="#manifest">extension.json</a>
   <a href="#rules">Reglas y límites</a>
+  <a href="#security">AxiomGuard</a>
   <a href="#publish-flow">Publicación</a>
   <a href="#updates">Actualizar</a>
   <a href="#errors">Errores comunes</a>
@@ -116,14 +117,29 @@
   </ul>
 </section>
 
+<section id="security" class="doc-section">
+  <h2>AxiomGuard · seguridad de extensiones</h2>
+  <p>Toda extensión de comunidad se analiza antes de publicarse y vuelve a analizarse en el equipo del usuario antes de instalarse. El análisis local es obligatorio; VirusTotal puede aportar reputación adicional cuando el servidor tiene una API key configurada.</p>
+  <ul class="rules">
+    <li>Bloquea ejecución directa de procesos del sistema mediante <code>child_process</code> y bypasses equivalentes.</li>
+    <li>Bloquea PowerShell ofuscado, loaders remotos, mecanismos de persistencia y patrones de evasión de antivirus.</li>
+    <li>Detecta patrones asociados a robo de credenciales, wallets, minería de criptomonedas y exfiltración.</li>
+    <li>Bloquea binarios y scripts del sistema como <code>.exe</code>, <code>.dll</code>, <code>.msi</code>, <code>.ps1</code>, <code>.bat</code>, <code>.cmd</code>, <code>.vbs</code>, <code>.hta</code>, <code>.jar</code>, <code>.node</code> y <code>.sh</code> dentro de extensiones normales.</li>
+    <li>Calcula SHA-256 de los archivos inspeccionados y conserva el estado de seguridad de la instalación.</li>
+    <li>Las extensiones copiadas manualmente a la carpeta local también son analizadas; una extensión bloqueada no se activa.</li>
+    <li>Las extensiones JavaScript locales de Scratch Power Mode pasan por AxiomGuard antes de ejecutarse.</li>
+  </ul>
+  <div class="callout"><strong>Importante:</strong> ningún análisis estático o antivirus garantiza detectar el 100% del malware. AxiomGuard usa varias capas para reducir el riesgo y aplica bloqueo preventivo cuando encuentra indicadores críticos.</div>
+</section>
+
 <section id="publish-flow" class="doc-section">
   <h2>Qué ocurre al publicar</h2>
   <ol class="steps compact">
-    <li><strong>Inspección.</strong><span>Render consulta GitHub y valida el manifiesto.</span></li>
+    <li><strong>Inspección.</strong><span>Render consulta GitHub, valida el manifiesto y ejecuta AxiomGuard sobre el código publicable.</span></li>
     <li><strong>Commit congelado.</strong><span>La publicación queda asociada al SHA del commit actual, para que el paquete no cambie silenciosamente.</span></li>
     <li><strong>Validación del paquete.</strong><span>Se respetan los límites que GitHub aplica al repositorio y se rechazan árboles truncados por la API de GitHub.</span></li>
     <li><strong>Registro.</strong><span>La extensión se guarda en Supabase y aparece en <code>/api/catalog</code>.</span></li>
-    <li><strong>Instalación.</strong><span>AxiomCode descarga los archivos por HTTPS y vuelve a validar ID y versión antes de instalar.</span></li>
+    <li><strong>Instalación.</strong><span>AxiomCode descarga los archivos por HTTPS, valida ID/versión y ejecuta AxiomGuard de nuevo antes de activar la extensión.</span></li>
   </ol>
   <p><a class="inline-link" href="./#publish">Ir al formulario de publicación →</a></p>
 </section>
@@ -148,6 +164,7 @@
     <details><summary>“Publica una versión mayor que…”</summary><p>Incrementa el valor de <code>version</code> antes de volver a publicar.</p></details>
     <details><summary>“GitHub no permite objetos Git normales mayores de 100 MiB”</summary><p>Ese archivo supera el límite aplicado por GitHub para un objeto Git normal. Reduce su tamaño o usa un mecanismo de distribución apropiado para archivos grandes.</p></details>
     <details><summary>“El repositorio debe ser público”</summary><p>Cambia la visibilidad del repositorio a pública antes de enviarlo a la marketplace.</p></details>
+    <details><summary>“AxiomGuard bloqueó la extensión”</summary><p>El análisis encontró un indicador crítico, un tipo de archivo ejecutable no permitido o una combinación de comportamientos de alto riesgo. Elimina ese comportamiento y vuelve a analizar el repositorio.</p></details>
   </div>
 </section>
 </article>
