@@ -1,6 +1,6 @@
 {
   "name": "axiomcode",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "AxiomCode - advanced desktop code editor",
   "main": "main.js",
   "scripts": {
@@ -15,7 +15,8 @@
     "test:scratch:3d": "electron scripts/smoke-scratch-3d.cjs",
     "test:scratch:power": "electron scripts/smoke-scratch-power.cjs",
     "test:scratch:optional": "electron scripts/smoke-optional-scratch.cjs",
-    "test:marketplace": "node --test scripts/test-marketplace.cjs"
+    "test:marketplace": "node --test scripts/test-marketplace.cjs",
+    "test:manage": "electron scripts/smoke-manage-center.cjs"
   },
   "author": "AxiomCode",
   "license": "MIT",
@@ -36,13 +37,21 @@
     "appId": "com.axiomcode.editor",
     "productName": "AxiomCode",
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "assets/branding/axiomcode.ico"
+    },
+    "nsis": {
+      "installerIcon": "assets/branding/axiomcode.ico",
+      "uninstallerIcon": "assets/branding/axiomcode.ico",
+      "installerHeaderIcon": "assets/branding/axiomcode.ico",
+      "shortcutName": "AxiomCode"
     },
     "files": [
       "main.js",
       "preload.js",
       "src/**/*",
       "backend/**/*",
+      "assets/**/*",
       "marketplace/fallback.json",
       "extensions/**/*",
       "licenses/**/*",
