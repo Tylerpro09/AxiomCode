@@ -5,7 +5,7 @@
     {
       "id": "axiom.scratch-mode",
       "name": "Modo Scratch",
-      "version": "2.4.0",
+      "version": "2.4.1",
       "description": "Scratch 3 Power Mode con Axiom 3D, física, web/JSON, almacenamiento, archivos con permiso, TTS, gamepad y extensiones JavaScript locales en sandbox.",
       "publisher": "AxiomCode",
       "verified": true,
