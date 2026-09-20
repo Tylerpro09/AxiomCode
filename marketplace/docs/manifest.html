@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Referencia del manifiesto de extensiones.">
+<title>extension.json · AxiomCode Docs</title>
+<link rel="stylesheet" href="../style.css?v=20260920-4">
+</head>
+<body>
+<header class="top"><a class="brand" href="../"><span>A</span>AxiomCode Marketplace</a><nav class="top-nav"><a href="../#editor">Editor</a><a href="../#extensions">Extensiones</a><a href="../docs.html" class="active">Documentación</a><a href="../#publish">Publicar</a><a class="github" href="https://github.com/Tylerpro09/AxiomCode">GitHub</a></nav></header>
+<main class="docs-page"><section class="docs-hero docs-hero-compact"><p class="eyebrow">DOCUMENTACIÓN · EXTENSION.JSON</p><h1>extension.json</h1><p>Referencia del manifiesto de extensiones.</p></section><div class="docs-layout"><aside class="docs-nav"><strong>Documentación</strong><a href="quickstart.html">Inicio rápido</a><a href="structure.html">Estructura</a><a href="manifest.html" class="active">extension.json</a><a href="rules.html">Reglas y límites</a><a href="security.html">AxiomGuard</a><a href="external-editors.html">Otros editores</a><a href="publish-flow.html">Publicación</a><a href="updates.html">Actualizar</a><a href="errors.html">Errores comunes</a><a href="../docs.html">← Índice</a></aside><article class="docs-content"><section id="manifest" class="doc-section">
+  <h2>extension.json</h2>
+  <p>Este es un manifiesto válido para publicar en la marketplace:</p>
+  <pre><code>{
+  "id": "tuusuario.mi-extension",
+  "name": "Mi extensión",
+  "version": "1.0.0",
+  "description": "Descripción corta de la extensión.",
+  "publisher": "TuNombre",
+  "keywords": ["productividad", "editor"],
+  "icon": "icon.png",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mi-extension.hello",
+        "title": "Decir hola"
+      }
+    ]
+  }
+}</code></pre>
+
+  <div class="field-table">
+    <div class="field-row field-head"><span>Campo</span><span>Requerido</span><span>Uso</span></div>
+    <div class="field-row"><code>id</code><span>Sí</span><span>Identificador único. Usa letras, números, punto, guion o guion bajo.</span></div>
+    <div class="field-row"><code>name</code><span>Sí</span><span>Nombre visible. Máximo 120 caracteres.</span></div>
+    <div class="field-row"><code>version</code><span>Sí</span><span>Versión publicada. Recomendado: SemVer, por ejemplo <code>1.2.0</code>.</span></div>
+    <div class="field-row"><code>description</code><span>No</span><span>Descripción visible en la marketplace.</span></div>
+    <div class="field-row"><code>publisher</code><span>No</span><span>Autor o equipo. Si falta, se usa el propietario del repo.</span></div>
+    <div class="field-row"><code>keywords</code><span>No</span><span>Hasta 20 etiquetas para búsqueda y descubrimiento.</span></div>
+    <div class="field-row"><code>icon</code><span>No</span><span>Ruta relativa a un icono que exista dentro del repositorio.</span></div>
+    <div class="field-row"><code>contributes</code><span>No</span><span>Contribuciones que AxiomCode puede interpretar, como comandos.</span></div>
+  </div>
+</section><div class="docs-pagination"><a href="structure.html">← Estructura</a><a href="rules.html">Reglas y límites →</a></div></article></div></main>
+<footer><span>AxiomCode Marketplace</span><span>Documentación de extensiones</span></footer>
+</body>
+</html>
