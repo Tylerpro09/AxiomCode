@@ -45,7 +45,8 @@ function json(res,status,data,extra={}){
 function cors(res){
   res.writeHead(204,{
     'Access-Control-Allow-Origin':SITE_ORIGIN,
-    'Access-Control-Allow-Headers':'Content-Type',
+    'Access-Control-Allow-Headers':'Content-Type, Accept, X-Market-Client-Id, X-Market-User-Id, VSCode-SessionId, X-Market-Search-Activity-Id, Activityid, X-Vss-E2eid',
+    'Access-Control-Expose-Headers':'Activityid, X-Vss-E2eid, X-Market-Search-Activity-Id, Server',
     'Access-Control-Allow-Methods':'GET,POST,OPTIONS',
     'Access-Control-Max-Age':'86400'
   });
