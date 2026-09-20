@@ -48,3 +48,32 @@ test('AxiomGuard ignores documentation-only security terms',()=>{
   const report=scanExtensionFiles([{path:'README.md',bytes:Buffer.from("Do not use require('child_process') or PowerShell -EncodedCommand in extensions.")}]);
   assert.equal(report.verdict,'clean');
 });
+
+const vscodeGallery=require('./vscodeGallery');
+
+test('VS Code gallery adapter returns native extensionquery shape',()=>{
+  const catalog={extensions:[{
+    id:'demo.hello',
+    name:'Hello',
+    version:'1.0.0',
+    description:'Demo',
+    publisher:'demo',
+    tags:['test'],
+    downloads:3,
+    install:{kind:'vscode-files',files:[],vscode:{manifest:{name:'hello',publisher:'demo',version:'1.0.0',engines:{vscode:'^1.80.0'},categories:['Other']}}}
+  }]};
+  const body={filters:[{criteria:[{filterType:10,value:'hello'}],pageNumber:1,pageSize:50,sortBy:0,sortOrder:0}],assetTypes:[],flags:0};
+  const out=vscodeGallery.query(catalog,body,'https://market.example');
+  const ext=out.results[0].extensions[0];
+  assert.equal(ext.extensionName,'hello');
+  assert.equal(ext.publisher.publisherName,'demo');
+  assert.ok(ext.versions[0].files.some(x=>x.assetType===vscodeGallery.ASSET.vsix));
+  assert.ok(ext.versions[0].files.some(x=>x.assetType===vscodeGallery.ASSET.manifest));
+});
+
+test('VS Code gallery adapter excludes legacy-only packages',()=>{
+  const out=vscodeGallery.query({extensions:[{id:'legacy.demo',name:'Legacy',version:'1.0.0',install:{kind:'files',files:[]}}]},{
+    filters:[{criteria:[],pageNumber:1,pageSize:50,sortBy:0,sortOrder:0}]
+  },'https://market.example');
+  assert.equal(out.results[0].extensions.length,0);
+});
