@@ -228,7 +228,7 @@ class AxiomExtensionService {
     const local=(await this.list()).find(x=>x.id===id && x.installed);
     if(!local) return this.install(id);
     if(this.compareVersions(online.version,local.version)<=0) return {...local,upToDate:true};
-    if(online.install?.kind==='bundled') throw new Error('La actualización de esta extensión viene con una nueva versión de AxiomCode');
+    if(online.install?.kind==='bundled') return {...local,requiresAppUpdate:true,availableVersion:online.version};
     return this.downloadMarketplaceExtension(online);
   }
 
