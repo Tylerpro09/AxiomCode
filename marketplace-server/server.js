@@ -323,20 +323,38 @@ async function readFallbackCatalog(){
   }catch(error){console.warn('fallback catalog failed:',error.message)}
   return {schemaVersion:1,name:'AxiomCode Marketplace',generatedAt:new Date().toISOString(),extensions:[]};
 }
+function bundledScratchExtension(ext,scratch){
+  const version=String(scratch?.version||ext.version||'2.4.1');
+  const description=scratch?.description||ext.description||'Scratch Power integrado en AxiomCode.';
+  const publisher=scratch?.publisher||ext.publisher||'AxiomCode';
+  const manifest={
+    name:'scratch-mode',displayName:ext.name||'Modo Scratch',publisher:'axiom',version,description,
+    engines:{vscode:'^1.139.0'},main:'./extension.js',categories:['Other'],
+    activationEvents:['onCommand:axiom.scratch.open'],
+    contributes:{commands:[{command:'axiom.scratch.open',title:'AxiomCode: Abrir Scratch Power'}]}
+  };
+  const extensionJs=[
+    "const vscode=require('vscode');",
+    "function activate(context){",
+    "  const open=()=>vscode.commands.executeCommand('axiomcode.scratch.open');",
+    "  context.subscriptions.push(vscode.commands.registerCommand('axiom.scratch.open',open));",
+    "}",
+    "exports.activate=activate;",
+    "exports.deactivate=()=>{};"
+  ].join('\n');
+  return {...ext,version,description,publisher,install:{
+    kind:'bundled',bundledId:'axiom.scratch-mode',
+    vscode:{manifest,generatedFiles:[{path:'extension.js',content:extensionJs}]}
+  }};
+}
 async function readCatalog(){
   const fallback=await readFallbackCatalog();
   const scratch=await latestBundledScratch();
-  const bundled=(fallback.extensions||[]).map(ext=>{
-    if(ext.id!=='axiom.scratch-mode'||!scratch)return ext;
-    return {...ext,version:scratch.version,description:scratch.description||ext.description,publisher:scratch.publisher||ext.publisher,install:{kind:'bundled',bundledId:'axiom.scratch-mode'}};
-  });
+  const bundled=(fallback.extensions||[]).map(ext=>ext.id==='axiom.scratch-mode'?bundledScratchExtension(ext,scratch):ext);
   if(!SUPABASE_URL||!SUPABASE_SECRET_KEY)return {...fallback,extensions:bundled};
   try{
     const rows=await sb('marketplace_extensions?select=*&status=eq.published&order=featured.desc,name.asc',{method:'GET'});
-    const normalized=(rows||[]).map(row=>{
-      if(row.id!=='axiom.scratch-mode'||!scratch)return row;
-      return {...row,version:scratch.version,description:scratch.description||row.description,publisher:scratch.publisher||row.publisher,install:{kind:'bundled',bundledId:'axiom.scratch-mode'}};
-    });
+    const normalized=(rows||[]).map(row=>row.id==='axiom.scratch-mode'?bundledScratchExtension(row,scratch):row);
     const merged=new Map(bundled.map(ext=>[ext.id,ext]));
     for(const ext of catalogFromRows(normalized).extensions)merged.set(ext.id,{...(merged.get(ext.id)||{}),...ext});
     return {schemaVersion:1,name:'AxiomCode Marketplace',generatedAt:new Date().toISOString(),extensions:[...merged.values()]};
