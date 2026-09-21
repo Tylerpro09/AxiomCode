@@ -367,6 +367,13 @@ ipcMain.handle('git:changes', async (_,cwd)=>run('git status --porcelain',cwd));
 ipcMain.handle('git:addAll', async (_,cwd)=>run('git add -A',cwd));
 ipcMain.handle('git:commit', async (_,cwd,message)=>run('git commit -m '+JSON.stringify(String(message||'')),cwd));
 ipcMain.handle('system:reveal', async (_, p) => { shell.showItemInFolder(p); return true; });
+ipcMain.handle('system:openExternal', async (_, rawUrl) => {
+  const url=new URL(String(rawUrl||''));
+  if(url.protocol!=='https:')throw new Error('Solo se permiten enlaces HTTPS');
+  const error=await shell.openExternal(url.href);
+  if(error)throw new Error(error);
+  return true;
+});
 async function searchFiles(root, query, results = []) { if (!query || results.length >= 150) return results; for (const e of await fsp.readdir(root, { withFileTypes: true })) { if (results.length >= 150) break; if (['node_modules','.git','dist','out'].includes(e.name)) continue; const p = path.join(root,e.name); if (e.isDirectory()) await searchFiles(p,query,results); else { try { const s = await fsp.stat(p); if (s.size > 2_000_000) continue; const lines=(await fsp.readFile(p,'utf8')).split(/\r?\n/); lines.forEach((line,i)=>{ if(results.length<150 && line.toLowerCase().includes(query.toLowerCase())) results.push({path:p,line:i+1,text:line.trim().slice(0,180)}); }); } catch {} } } return results; }
 ipcMain.handle('workspace:search', async (_, root, query) => searchFiles(root, query));
 let materialIcons;
