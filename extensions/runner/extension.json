@@ -1,0 +1,15 @@
+{
+  "id": "axiom.runner",
+  "name": "Runner",
+  "version": "1.0.0",
+  "description": "Ejecutor universal para AxiomCode: detecta runtimes y compila o ejecuta archivos activos desde el editor.",
+  "publisher": "AxiomCode",
+  "contributes": {
+    "commands": [
+      {"command": "runner.open", "title": "Runner: Abrir"},
+      {"command": "runner.runActive", "title": "Runner: Ejecutar archivo activo"},
+      {"command": "runner.stop", "title": "Runner: Detener ejecución"}
+    ]
+  },
+  "installedByDefault": false
+}
