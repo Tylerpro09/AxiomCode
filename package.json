@@ -1,6 +1,6 @@
 {
   "name": "axiomcode",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "AxiomCode - advanced desktop code editor",
   "main": "main.js",
   "scripts": {
@@ -8,7 +8,8 @@
     "dev": "electron .",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
-    "postinstall": "node scripts/ensure-electron.cjs",
+    "postinstall": "node scripts/ensure-electron.cjs && electron-builder install-app-deps",
+    "test": "npm run test:marketplace && npm run test:scratch && npm run test:runner",
     "test:scratch": "node --test scripts/test-scratch.cjs",
     "test:scratch:smoke": "electron scripts/smoke-scratch.cjs",
     "test:scratch:official": "electron scripts/smoke-scratch-official.cjs",
@@ -16,6 +17,8 @@
     "test:scratch:power": "electron scripts/smoke-scratch-power.cjs",
     "test:scratch:optional": "electron scripts/smoke-optional-scratch.cjs",
     "test:marketplace": "node --test scripts/test-marketplace.cjs",
+    "test:runner": "node --test scripts/test-runner.cjs",
+    "test:runner:smoke": "electron scripts/smoke-runner.cjs",
     "test:manage": "electron scripts/smoke-manage-center.cjs"
   },
   "author": "AxiomCode",
@@ -24,13 +27,13 @@
     "@vscode/codicons": "^0.0.46-24",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "adm-zip": "^0.6.1",
     "material-icon-theme": "^5.38.1",
     "monaco-editor": "^0.52.2",
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.2.0",
-    "electron": "^38.8.6",
+    "electron": "^44.4.3",
     "electron-builder": "^26.0.12"
   },
   "build": {
@@ -53,7 +56,6 @@
       "backend/**/*",
       "assets/**/*",
       "marketplace/fallback.json",
-      "extensions/**/*",
       "licenses/**/*",
       "CODE_OSS_INTEGRATION.md",
       "node_modules/monaco-editor/**/*",
@@ -62,11 +64,12 @@
       "node_modules/@vscode/codicons/**/*",
       "node_modules/@xterm/xterm/**/*",
       "node_modules/@xterm/addon-fit/**/*",
-      "node_modules/node-pty/**/*"
+      "node_modules/node-pty/**/*",
+      "node_modules/adm-zip/**/*"
     ]
   },
   "allowScripts": {
-    "electron@38.8.6": true,
+    "electron@44.4.3": true,
     "node-pty@1.1.0": true
   }
 }

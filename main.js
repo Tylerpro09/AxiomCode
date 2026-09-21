@@ -12,6 +12,7 @@ const { createBackend } = require('./backend');
 const {scanExtensionFiles,assertExtensionSafe}=require('./backend/services/extensionSecurity');
 let scratchCore;
 const SCRATCH_EXTENSION_ID = 'axiom.scratch-mode';
+const RUNNER_EXTENSION_ID = 'axiom.runner';
 const MAX_AXIOM_SCRATCH_BYTES = 100 * 1024 * 1024;
 const MAX_SB3_BYTES = 512 * 1024 * 1024;
 const SCRATCH_POWER_STORAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -189,7 +190,7 @@ ipcMain.handle('scratch:save', async (_, data) => {
   return filePath;
 });
 const { ScratchService } = require('./backend/services/scratchService');
-let mainWindow, backend, scratchService;
+let mainWindow, backend, scratchService, runnerService, runnerServicePath;
 const UPDATE_REPO='Tylerpro09/AxiomCode';
 let cachedUpdate=null,updateDownloadActive=false;
 function versionParts(v){
@@ -268,13 +269,29 @@ async function downloadAndLaunchUpdate(update){
   }
 }
 async function requireScratchInstalled(){
-  if(!backend || !await backend.extensions.isInstalled(SCRATCH_EXTENSION_ID)) throw new Error('La extensión Modo Scratch no está instalada');
-  if(!scratchCore) scratchCore=require('./extensions/scratch-mode/core');
+  if(!backend) throw new Error('AxiomCode todavía no está listo');
+  const entry=await backend.extensions.installedEntry(SCRATCH_EXTENSION_ID);
+  if(!entry) throw new Error('La extensión Modo Scratch no está instalada');
+  if(!scratchCore) scratchCore=require(path.join(entry.path,'core.js'));
+  return entry;
 }
 async function ensureScratchService(){
-  await requireScratchInstalled();
-  if(!scratchService){ scratchService=new ScratchService(app,__dirname); await scratchService.start(); }
+  const entry=await requireScratchInstalled();
+  if(!scratchService){ scratchService=new ScratchService(app,entry.path); await scratchService.start(); }
   return scratchService;
+}
+async function ensureRunnerService(){
+  if(!backend)throw new Error('AxiomCode todavía no está listo');
+  const entry=await backend.extensions.installedEntry(RUNNER_EXTENSION_ID);
+  if(!entry)throw new Error('La extensión Runner no está instalada');
+  const servicePath=path.join(entry.path,'runnerService.js');
+  if(runnerService&&runnerServicePath===servicePath)return runnerService;
+  delete require.cache[require.resolve(servicePath)];
+  const mod=require(servicePath);
+  const RunnerService=mod.RunnerService||mod.default||mod;
+  runnerService=new RunnerService();
+  runnerServicePath=servicePath;
+  return runnerService;
 }
 ipcMain.on('scratch:confirmDiscard', event => {
   event.returnValue = dialog.showMessageBoxSync(mainWindow, {type:'question',title:'Cambios sin guardar en Scratch',message:'Hay cambios sin guardar en el proyecto de bloques.',detail:'Guarda el proyecto antes de continuar si quieres conservar los cambios.',buttons:['Cancelar','Descartar cambios'],defaultId:0,cancelId:0,noLink:true}) === 1;
@@ -412,10 +429,21 @@ ipcMain.handle('preferences:import',async()=>{
 });
 ipcMain.handle('extensions:list',()=>backend.extensions.list());
 ipcMain.handle('extensions:marketplace',(_,force=false)=>backend.extensions.marketplace(Boolean(force)));
-ipcMain.handle('extensions:update',async(_,id)=>backend.extensions.update(id));
-ipcMain.handle('extensions:install',async(_,id)=>backend.extensions.install(id));
-ipcMain.handle('extensions:uninstall',async(_,id)=>{const result=await backend.extensions.uninstall(id);if(id===SCRATCH_EXTENSION_ID){scratchService?.close();scratchService=null;}return result;});
+ipcMain.handle('extensions:update',async(_,id)=>{const result=await backend.extensions.update(id);if(id===SCRATCH_EXTENSION_ID){scratchService?.close();scratchService=null;scratchCore=null;}if(id===RUNNER_EXTENSION_ID){runnerService=null;runnerServicePath=null;}return result;});
+ipcMain.handle('extensions:install',async(_,id)=>{const result=await backend.extensions.install(id);if(id===SCRATCH_EXTENSION_ID){scratchService?.close();scratchService=null;scratchCore=null;}if(id===RUNNER_EXTENSION_ID){runnerService=null;runnerServicePath=null;}return result;});
+ipcMain.handle('extensions:uninstall',async(_,id)=>{const result=await backend.extensions.uninstall(id);if(id===SCRATCH_EXTENSION_ID){scratchService?.close();scratchService=null;scratchCore=null;}if(id===RUNNER_EXTENSION_ID){runnerService=null;runnerServicePath=null;}return result;});
 ipcMain.handle('extensions:openFolder',()=>backend.extensions.openFolder(shell));
+ipcMain.handle('extensions:readText',(_,id,relativePath)=>backend.extensions.readInstalledText(id,relativePath));
+ipcMain.handle('runner:describe',async(_,file)=>{
+  const installed=await backend.extensions.isInstalled(RUNNER_EXTENSION_ID);
+  if(!installed)return {installed:false,supported:false,extension:path.extname(String(file||'')).slice(1).toLowerCase(),candidates:[]};
+  const service=await ensureRunnerService();
+  return {installed:true,...service.describe(file)};
+});
+ipcMain.handle('runner:prepare',async(_,file)=>{
+  const service=await ensureRunnerService();
+  return service.prepare(file);
+});
 ipcMain.on('renderer:ready',(_,info)=>console.log('[AxiomCode] renderer listo',info));
 let pty=null; try{pty=require('node-pty');console.log('[AxiomCode] node-pty disponible');}catch(e){console.warn('[AxiomCode] node-pty no disponible, usando fallback:',e.message);}
 const terminalSessions=new Map(); let terminalCounter=0;

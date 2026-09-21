@@ -16,8 +16,31 @@
         "3d"
       ],
       "install": {
-        "kind": "bundled",
-        "bundledId": "axiom.scratch-mode"
+        "kind": "repository",
+        "repoUrl": "https://github.com/Tylerpro09/AxiomCode",
+        "ref": "main",
+        "subdir": "extensions/scratch-mode"
+      }
+    },
+    {
+      "id": "axiom.runner",
+      "name": "Runner",
+      "version": "1.0.0",
+      "description": "Ejecutor universal para AxiomCode con detección de runtimes, compilación y terminal integrada.",
+      "publisher": "AxiomCode",
+      "verified": true,
+      "featured": true,
+      "tags": [
+        "runner",
+        "ejecutar",
+        "compilar",
+        "terminal"
+      ],
+      "install": {
+        "kind": "repository",
+        "repoUrl": "https://github.com/Tylerpro09/AxiomCode",
+        "ref": "main",
+        "subdir": "extensions/runner"
       }
     }
   ]

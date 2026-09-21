@@ -52,6 +52,9 @@ contextBridge.exposeInMainWorld('axiom', {
   installExtension: id => ipcRenderer.invoke('extensions:install', id),
   uninstallExtension: id => ipcRenderer.invoke('extensions:uninstall', id),
   openExtensionsFolder: () => ipcRenderer.invoke('extensions:openFolder'),
+  readExtensionText: (id, relativePath) => ipcRenderer.invoke('extensions:readText', id, relativePath),
+  describeRunner: path => ipcRenderer.invoke('runner:describe', path),
+  prepareRunner: path => ipcRenderer.invoke('runner:prepare', path),
   onWorkspaceFileChanged: cb => ipcRenderer.on('workspace:fileChanged', (_e, data) => cb(data)),
   reveal: p => ipcRenderer.invoke('system:reveal', p),
   rendererReady: info => ipcRenderer.send('renderer:ready', info)

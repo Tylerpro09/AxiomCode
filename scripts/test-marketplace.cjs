@@ -9,14 +9,39 @@ test('AxiomCode uses Render marketplace API by default',()=>{
   assert.equal(DEFAULT_MARKETPLACE_URL,'https://axiomcode-marketplace.onrender.com/api/catalog');
 });
 
-test('fallback catalog exposes bundled Scratch',async()=>{
+test('fallback catalog exposes repository extensions',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'axiom-market-'));
   try{
     const service=new AxiomExtensionService(fakeApp(dir),path.resolve(__dirname,'..'));
     const fallback=await service.readFallbackCatalog();
     const scratch=fallback.extensions.find(x=>x.id==='axiom.scratch-mode');
+    const runner=fallback.extensions.find(x=>x.id==='axiom.runner');
     assert.ok(scratch);
-    assert.equal(scratch.install.kind,'bundled');
+    assert.ok(runner);
+    assert.equal(scratch.install.kind,'repository');
+    assert.equal(runner.install.kind,'repository');
+    assert.equal(scratch.install.subdir,'extensions/scratch-mode');
+    assert.equal(runner.install.subdir,'extensions/runner');
+  }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('Runner is absent from runtime until installed into userData',async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'axiom-market-'));
+  try{
+    const service=new AxiomExtensionService(fakeApp(dir),path.resolve(__dirname,'..'));
+    assert.equal((await service.list()).some(x=>x.id==='axiom.runner'),false);
+    const source=path.resolve(__dirname,'..','extensions','runner');
+    const target=path.join(dir,'extensions','runner');
+    fs.mkdirSync(path.dirname(target),{recursive:true});
+    fs.cpSync(source,target,{recursive:true});
+    const state=await service.readState();
+    state.installed['axiom.runner']=true;
+    state.security['axiom.runner']={engine:'AxiomGuard Static 1.0',verdict:'clean',score:0,version:'1.0.0',hashes:{}};
+    await service.writeState(state);
+    const installed=(await service.list()).find(x=>x.id==='axiom.runner');
+    assert.ok(installed);
+    assert.equal(installed.installed,true);
+    assert.equal(installed.enabled,true);
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 

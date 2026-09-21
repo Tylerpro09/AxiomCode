@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "AxiomCode Marketplace",
-  "generatedAt": "2026-09-19T00:00:00Z",
+  "generatedAt": "2026-09-20T00:00:00Z",
   "extensions": [
     {
       "id": "axiom.scratch-mode",
@@ -19,8 +19,32 @@
       ],
       "homepage": "https://github.com/Tylerpro09/AxiomCode",
       "install": {
-        "kind": "bundled",
-        "bundledId": "axiom.scratch-mode"
+        "kind": "repository",
+        "repoUrl": "https://github.com/Tylerpro09/AxiomCode",
+        "ref": "main",
+        "subdir": "extensions/scratch-mode"
+      }
+    },
+    {
+      "id": "axiom.runner",
+      "name": "Runner",
+      "version": "1.0.0",
+      "description": "Ejecutor universal para AxiomCode con detección de runtimes, compilación y terminal integrada.",
+      "publisher": "AxiomCode",
+      "verified": true,
+      "featured": true,
+      "tags": [
+        "runner",
+        "ejecutar",
+        "compilar",
+        "terminal"
+      ],
+      "homepage": "https://github.com/Tylerpro09/AxiomCode",
+      "install": {
+        "kind": "repository",
+        "repoUrl": "https://github.com/Tylerpro09/AxiomCode",
+        "ref": "main",
+        "subdir": "extensions/runner"
       }
     }
   ]

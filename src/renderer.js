@@ -1,9 +1,40 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-let editor=null,workspace=null,activePath=null,iconManifest=null,paletteMode='commands',paletteItems=[],sideMode='explorer',panelMode='terminal',sidebarVisible=true,scratchInstalled=false,appUpdate=null,updateBusy=false;
+let editor=null,workspace=null,activePath=null,iconManifest=null,paletteMode='commands',paletteItems=[],sideMode='explorer',panelMode='terminal',sidebarVisible=true,scratchInstalled=false,runnerInstalled=false,scratchAssetsLoaded=false,appUpdate=null,updateBusy=false;
 const tabs=new Map(), terminalState={sessions:new Map(),active:null};
 const outputLog=[], debugLog=[];let autoSaveTimer=null;
-async function refreshExtensionState(){const items=await window.axiom.listExtensions();scratchInstalled=Boolean(items.find(x=>x.id==='axiom.scratch-mode'&&x.installed&&x.enabled));const b=$('#scratchBtn');if(b)b.style.display=scratchInstalled?'':'none';return items;}
-async function openScratchMode(path){if(!scratchInstalled){setSideMode('extensions');showInfo('Modo Scratch','<p>La extensión <b>Modo Scratch</b> no está instalada.</p><p>Instálala desde Extensiones para abrir proyectos .sb3.</p>');return false;}if(path)await window.AxiomScratch.open(path);else await window.AxiomScratch.show();return true;}
+async function ensureScratchAssetsLoaded(){
+  if(scratchAssetsLoaded&&window.AxiomScratch)return true;
+  if(!scratchInstalled)return false;
+  const css=await window.axiom.readExtensionText('axiom.scratch-mode','style.css');
+  let style=document.querySelector('style[data-axiom-extension="axiom.scratch-mode"]');
+  if(!style){style=document.createElement('style');style.dataset.axiomExtension='axiom.scratch-mode';document.head.appendChild(style);}
+  style.textContent=css;
+  for(const file of ['core.js','view.js','official-view.js']){
+    const code=await window.axiom.readExtensionText('axiom.scratch-mode',file);
+    const script=document.createElement('script');
+    script.dataset.axiomExtension='axiom.scratch-mode';
+    script.textContent=code+'\n//# sourceURL=axiom-extension://axiom.scratch-mode/'+file;
+    const nonce=document.querySelector('script[nonce]')?.nonce;
+    if(nonce)script.nonce=nonce;
+    document.body.appendChild(script);
+  }
+  scratchAssetsLoaded=Boolean(window.AxiomScratch);
+  if(!scratchAssetsLoaded)throw new Error('Modo Scratch no pudo inicializarse');
+  return true;
+}
+async function refreshExtensionState(){
+  const items=await window.axiom.listExtensions();
+  scratchInstalled=Boolean(items.find(x=>x.id==='axiom.scratch-mode'&&x.installed&&x.enabled));
+  runnerInstalled=Boolean(items.find(x=>x.id==='axiom.runner'&&x.installed&&x.enabled));
+  const b=$('#scratchBtn');if(b)b.style.display=scratchInstalled?'':'none';
+  return items;
+}
+async function openScratchMode(path){
+  if(!scratchInstalled){setSideMode('extensions');showInfo('Modo Scratch','<p>La extensión <b>Modo Scratch</b> no está instalada.</p><p>Instálala desde Extensiones para abrir proyectos .sb3.</p>');return false;}
+  try{await ensureScratchAssetsLoaded();}catch(e){showInfo('Modo Scratch','<p>'+escapeHtml(e.message)+'</p>');return false;}
+  if(path)await window.AxiomScratch.open(path);else await window.AxiomScratch.show();return true;
+}
+function openRunnerMode(){if(!runnerInstalled){setSideMode('extensions');showInfo('Runner','<p>La extensión <b>Runner</b> no está instalada.</p><p>Instálala desde Extensiones para activar el ejecutor universal.</p>');return false;}setSideMode('run');return true;}
 const lang={js:'javascript',mjs:'javascript',cjs:'javascript',ts:'typescript',tsx:'typescript',jsx:'javascript',py:'python',html:'html',htm:'html',css:'css',scss:'scss',json:'json',md:'markdown',xml:'xml',yaml:'yaml',yml:'yaml',java:'java',c:'c',h:'c',cpp:'cpp',hpp:'cpp',cs:'csharp',php:'php',sql:'sql',sh:'shell',ps1:'powershell',bat:'bat',go:'go',rs:'rust',lua:'lua'};
 const basename=p=>(p||'').split(/[\\/]/).filter(Boolean).pop()||p;
 const dirname=p=>(p||'').replace(/[\\/][^\\/]+$/,'');
@@ -65,8 +96,8 @@ async function openFile(p,line){if(/\.(axiomscratch|sb3|sb2|sb)$/i.test(p))retur
 async function openFiles(){const paths=await window.axiom.openFiles(workspace?.root);for(const p of paths||[])await openFile(p);}
 function activate(p){window.AxiomScratch?.hide();const t=tabs.get(p);if(!t)return;activePath=p;editor.setModel(t.model);showCode(true);renderTabs();$('#language').textContent=fileLang(p);$('#breadcrumbText').textContent=(workspace?basename(workspace.root)+'  >  ':'')+basename(p);editor.focus();setStatus(p);if(sideMode==='explorer')renderSideView();}
 function closeTab(p){const t=tabs.get(p);if(!t)return;if(t.dirty&&!confirm(`Hay cambios sin guardar en ${basename(p)}. ¿Cerrar?`))return;t.model.dispose();tabs.delete(p);if(activePath===p){activePath=[...tabs.keys()].pop()||null;if(activePath)activate(activePath);else{showCode(false);$('#breadcrumbText').textContent=workspace?basename(workspace.root):'AxiomCode';}}renderTabs();}
-async function saveActive(){if(window.AxiomScratch.visible)return window.AxiomScratch.save();if(!activePath)return;const t=tabs.get(activePath);await window.axiom.writeFile(activePath,t.model.getValue());t.dirty=false;renderTabs();setStatus('Guardado '+basename(activePath));logOutput('Guardado '+activePath);if(activePath===window.AxiomPreferences?.state?.settingsPath)await window.AxiomPreferences.reloadFromDisk();}
-async function saveAll(){if(window.AxiomScratch.visible)await window.AxiomScratch.save();for(const [p,t] of tabs){if(t.dirty){await window.axiom.writeFile(p,t.model.getValue());t.dirty=false;}}renderTabs();setStatus('Todos los archivos guardados');}
+async function saveActive(){if(window.AxiomScratch?.visible)return window.AxiomScratch.save();if(!activePath)return;const t=tabs.get(activePath);await window.axiom.writeFile(activePath,t.model.getValue());t.dirty=false;renderTabs();setStatus('Guardado '+basename(activePath));logOutput('Guardado '+activePath);if(activePath===window.AxiomPreferences?.state?.settingsPath)await window.AxiomPreferences.reloadFromDisk();}
+async function saveAll(){if(window.AxiomScratch?.visible)await window.AxiomScratch.save();for(const [p,t] of tabs){if(t.dirty){await window.axiom.writeFile(p,t.model.getValue());t.dirty=false;}}renderTabs();setStatus('Todos los archivos guardados');}
 function useWorkspace(w,restored=false){if(!w)return;workspace=w;$('#workspaceName').textContent=basename(w.root).toUpperCase();$('#breadcrumbText').textContent=basename(w.root);sideMode='explorer';renderSideView();setStatus((restored?'Proyecto restaurado: ':'Proyecto: ')+w.root);logOutput((restored?'Carpeta restaurada: ':'Carpeta abierta: ')+w.root);updateGit();window.AxiomPreferences?.onWorkspaceChanged();}
 async function openWorkspace(){const w=await window.axiom.openWorkspace();if(w)useWorkspace(w,false);}
 async function refreshWorkspace(){if(!workspace)return;workspace=await window.axiom.refreshWorkspace(workspace.root);renderSideView();setStatus('Explorador actualizado');}
@@ -79,12 +110,23 @@ function renderExplorer(host){if(!workspace){host.innerHTML='<div class="empty-s
 function renderSearch(host){host.innerHTML='<div class="side-search"><div class="side-input"><span class="codicon codicon-search"></span><input id="sideSearchInput" placeholder="Buscar"></div><div id="sideSearchResults" class="side-results"></div></div>';const input=$('#sideSearchInput'),results=$('#sideSearchResults');let timer;const run=()=>{clearTimeout(timer);timer=setTimeout(async()=>{const q=input.value.trim();results.innerHTML='';if(!q||!workspace)return;results.innerHTML='<div class="view-note">Buscando...</div>';const rows=await window.axiom.searchWorkspace(workspace.root,q);results.innerHTML='';if(!rows.length)results.innerHTML='<div class="view-note">Sin resultados</div>';for(const r of rows){const d=document.createElement('button');d.className='search-result';d.innerHTML=`<b>${escapeHtml(basename(r.path))}:${r.line}</b><span>${escapeHtml(r.text)}</span>`;d.onclick=()=>openFile(r.path,r.line);results.appendChild(d);}},180);};input.oninput=run;input.focus();}
 function parseChanges(text){return String(text||'').split(/\r?\n/).filter(Boolean).map(line=>({code:line.slice(0,2).trim()||'M',path:line.slice(3)}));}
 async function renderSCM(host){if(!workspace){host.innerHTML='<div class="view-note">Abre una carpeta para usar Git.</div>';return;}host.innerHTML='<div class="view-note">Cargando cambios...</div>';const r=await window.axiom.gitChanges(workspace.root);if(!r.ok){host.innerHTML='<div class="view-note">Esta carpeta no es un repositorio Git.</div>';return;}const changes=parseChanges(r.stdout);host.innerHTML='<div class="scm-toolbar"><button id="stageAllBtn"><span class="codicon codicon-add"></span> Preparar todo</button></div><div class="commit-box"><input id="commitInput" placeholder="Mensaje de commit"><button id="commitBtn">Commit</button></div><div id="scmFiles"></div>';const list=$('#scmFiles');if(!changes.length)list.innerHTML='<div class="view-note">No hay cambios.</div>';for(const c of changes){const b=document.createElement('button');b.className='scm-file';b.innerHTML=`<span>${escapeHtml(c.path)}</span><b>${escapeHtml(c.code)}</b>`;b.onclick=()=>openFile(join(workspace.root,c.path.replace(/\//g,'\\')));list.appendChild(b);}$('#stageAllBtn').onclick=async()=>{await window.axiom.gitAddAll(workspace.root);logOutput('Git: todos los cambios preparados');renderSCM(host);};$('#commitBtn').onclick=async()=>{const msg=$('#commitInput').value.trim();if(!msg)return;const res=await window.axiom.gitCommit(workspace.root,msg);logOutput(res.stdout||res.stderr||'Git commit');await updateGit();renderSCM(host);};}
-function renderRunView(host){host.innerHTML=`<div class="run-view"><div class="run-icon"><span class="codicon codicon-debug-alt"></span></div><h3>Ejecutar y depurar</h3><p>${activePath?'Archivo activo: '+escapeHtml(basename(activePath)):'Abre un archivo ejecutable.'}</p><button id="runActiveSide" ${activePath?'':'disabled'}><span class="codicon codicon-play"></span> Ejecutar archivo activo</button></div>`;const b=$('#runActiveSide');if(b)b.onclick=runActiveFile;}
+function renderRunView(host){
+  if(!runnerInstalled){
+    host.innerHTML=`<div class="run-view"><div class="run-icon"><span class="codicon codicon-debug-alt"></span></div><h3>Ejecutar y depurar</h3><p>Instala <b>Runner</b> para activar ejecución universal, detección de runtimes y compilación automática.</p><button id="runnerInstallView"><span class="codicon codicon-extensions"></span> Ver Runner en Extensiones</button></div>`;
+    const install=$('#runnerInstallView');if(install)install.onclick=()=>setSideMode('extensions');
+    return;
+  }
+  host.innerHTML=`<div class="run-view"><div class="run-icon"><span class="codicon codicon-play-circle"></span></div><h3>Runner</h3><p>${activePath?'Archivo activo: '+escapeHtml(basename(activePath)):'Abre un archivo ejecutable.'}</p><div id="runnerRuntime" class="view-note">Detectando ejecutor…</div><button id="runActiveSide" ${activePath?'':'disabled'}><span class="codicon codicon-play"></span> Ejecutar archivo activo</button><button id="stopRunnerSide"><span class="codicon codicon-debug-stop"></span> Detener</button><p class="view-note">JS/TS · Python · PowerShell · BAT · PHP · Ruby · Perl · Lua · Go · Rust · C/C++ · Java · C# · Dart · Bash · HTML</p></div>`;
+  const b=$('#runActiveSide');if(b)b.onclick=runActiveFile;
+  const stop=$('#stopRunnerSide');if(stop)stop.onclick=stopRunner;
+  if(activePath)window.axiom.describeRunner(activePath).then(info=>{const node=$('#runnerRuntime');if(!node)return;node.textContent=info.supported?`${info.name} · ${(info.candidates||[]).join(' / ')||'sistema'}`:(info.reason||'Tipo de archivo no compatible con Runner');}).catch(()=>{});
+  else {const node=$('#runnerRuntime');if(node)node.textContent='Sin archivo activo';}
+}
 async function renderExtensions(host){
  host.innerHTML='<div class="side-search"><div class="side-input"><span class="codicon codicon-search"></span><input id="extSearch" placeholder="Buscar en Axiom Marketplace"></div><div class="market-toolbar"><button id="refreshMarketplace"><span class="codicon codicon-refresh"></span> Actualizar</button><span id="marketStatus">Conectando…</span></div><button id="openExtFolder" class="ext-folder-btn"><span class="codicon codicon-folder-opened"></span> Extensiones locales</button><div id="extList"><div class="view-note">Cargando marketplace...</div></div></div>';
  let locals=await refreshExtensionState();
- let market={extensions:[],source:'offline',error:null};
- try{market=await window.axiom.getMarketplace(false);}catch(e){market={extensions:[],source:'offline',error:e.message};}
+ let market={extensions:[],source:'local',error:null};
+ const marketPromise=window.axiom.getMarketplace(false).catch(e=>({extensions:[],source:'offline',error:e.message}));
  const status=$('#marketStatus');
  const setMarketStatus=()=>{status.textContent=market.error?'Offline · catálogo local':((market.source==='online'?'Online':market.source||'local')+' · '+(market.extensions?.length||0)+' extensiones');};
  const rows=()=>{
@@ -113,15 +155,21 @@ async function renderExtensions(host){
        if(x.id==='axiom.scratch-mode'){
          const o=document.createElement('button');o.textContent='Abrir';o.className='scratch-extension-open';o.onclick=()=>openScratchMode();actions.appendChild(o);
        }
+       if(x.id==='axiom.runner'){
+         const o=document.createElement('button');o.textContent='Abrir';o.className='runner-extension-open';o.onclick=()=>openRunnerMode();actions.appendChild(o);
+       }
        const u=document.createElement('button');u.textContent='Desinstalar';u.className='extension-uninstall';u.onclick=async()=>{if(!confirm('¿Desinstalar '+x.name+'?'))return;if(x.id==='axiom.scratch-mode')window.AxiomScratch?.hide();try{await window.axiom.uninstallExtension(x.id);locals=await refreshExtensionState();market=await window.axiom.getMarketplace(true);setMarketStatus();draw($('#extSearch').value);setStatus('Extensión desinstalada: '+x.name);}catch(e){showInfo('Error al desinstalar','<p>'+escapeHtml(e.message)+'</p>');}};actions.appendChild(u);
      }
      el.appendChild(card);
    }
  };
- setMarketStatus();draw('');
+ status.textContent='Local · '+locals.length+' extensiones';draw('');
  $('#extSearch').oninput=e=>draw(e.target.value);
  $('#refreshMarketplace').onclick=async()=>{status.textContent='Actualizando…';try{market=await window.axiom.getMarketplace(true);locals=await refreshExtensionState();setMarketStatus();draw($('#extSearch').value);}catch(e){status.textContent='Sin conexión';}};
  $('#openExtFolder').onclick=()=>window.axiom.openExtensionsFolder();
+ market=await marketPromise;
+ if(!status.isConnected||sideMode!=='extensions')return;
+ setMarketStatus();draw($('#extSearch').value);
 }
 function renderSideView(){const host=$('#tree'),title=$('.side-head>span');host.innerHTML='';const titles={explorer:'EXPLORADOR',search:'BUSCAR',scm:'CONTROL DE CÓDIGO FUENTE',run:'EJECUTAR Y DEPURAR',extensions:'EXTENSIONES'};title.textContent=titles[sideMode]||'EXPLORADOR';$$('.activity button').forEach(b=>b.classList.remove('active'));const map={explorer:'#explorerBtn',search:'#searchBtn',scm:'#gitBtn',run:'#runBtn',extensions:'#extensionsBtn'};$(map[sideMode])?.classList.add('active');$('.side-actions').style.display=sideMode==='explorer'?'flex':'none';if(sideMode==='explorer')renderExplorer(host);if(sideMode==='search')renderSearch(host);if(sideMode==='scm')renderSCM(host);if(sideMode==='run')renderRunView(host);if(sideMode==='extensions')renderExtensions(host);}
 function setSideMode(mode){sideMode=mode;if(!sidebarVisible)toggleSidebar(true);renderSideView();}
@@ -139,11 +187,43 @@ async function execPersistentTerminal(command){let t=terminalState.sessions.get(
 window.axiom.onTerminalData(({id,data})=>{const t=terminalState.sessions.get(id);if(!t)return;if(t.term)t.term.write(String(data));else{t.buffer+=String(data).replace(/\x1B\[[0-?]*[ -\/]*[@-~]/g,'');if(t.buffer.length>500000)t.buffer=t.buffer.slice(-500000);if(id===terminalState.active)renderActiveTerminal();}});
 window.axiom.onTerminalExit(({id,code})=>{const t=terminalState.sessions.get(id);if(!t)return;if(t.term)t.term.writeln('\r\n[proceso terminado: '+(code??'')+']');else{t.buffer+='\r\n[proceso terminado: '+(code??'')+']';if(id===terminalState.active)renderActiveTerminal();}});
 function shellQuote(p){return '"'+String(p).replace(/"/g,'""')+'"';}
-async function runActiveFile(){if(window.AxiomScratch.visible)return window.AxiomScratch.run();if(!activePath)return setStatus('No hay archivo activo');await saveActive();const ext=(activePath.split('.').pop()||'').toLowerCase();let cmd='';if(['js','mjs','cjs'].includes(ext))cmd=`node ${shellQuote(activePath)}`;else if(ext==='py')cmd=`python ${shellQuote(activePath)}`;else if(ext==='ps1')cmd=`powershell -ExecutionPolicy Bypass -File ${shellQuote(activePath)}`;else if(['bat','cmd'].includes(ext))cmd=`cmd /c ${shellQuote(activePath)}`;else if(ext==='php')cmd=`php ${shellQuote(activePath)}`;else return showInfo('Ejecutar','No hay ejecutor configurado para <b>'+escapeHtml(ext||'este tipo de archivo')+'</b>.');await newTerminal('powershell');debugLog.push('Ejecutando '+activePath);await execPersistentTerminal(cmd);setStatus('Ejecutando '+basename(activePath));}
+async function stopRunner(){
+  const id=terminalState.active;
+  if(!id){setStatus('Runner: no hay ejecución activa');return false;}
+  await window.axiom.writeTerminal(id,'\x03');
+  setStatus('Runner: señal de detención enviada');
+  debugLog.push('Runner: detener '+id);
+  return true;
+}
+async function runActiveFile(){
+  if(window.AxiomScratch?.visible)return window.AxiomScratch.run();
+  if(!activePath)return setStatus('No hay archivo activo');
+  await saveActive();
+  if(runnerInstalled){
+    let plan;
+    try{plan=await window.axiom.prepareRunner(activePath);}
+    catch(e){showInfo('Runner','<p>'+escapeHtml(e.message)+'</p>');return;}
+    if(!plan.supported){showInfo('Runner','<p>'+escapeHtml(plan.reason||'Tipo de archivo no compatible.')+'</p>');return;}
+    if(!plan.available){showInfo('Runner',`<p>No se encontró un runtime para <b>${escapeHtml(plan.name||plan.extension)}</b>.</p><p>Buscado: ${escapeHtml((plan.candidates||[]).join(', ')||'runtime compatible')}.</p>`);return;}
+    await newTerminal('powershell');
+    debugLog.push('Runner: '+plan.name+' · '+activePath+' · '+plan.tool);
+    await execPersistentTerminal(plan.command);
+    setStatus('Runner: ejecutando '+basename(activePath)+' con '+plan.name);
+    return;
+  }
+  const ext=(activePath.split('.').pop()||'').toLowerCase();let cmd='';
+  if(['js','mjs','cjs'].includes(ext))cmd=`node ${shellQuote(activePath)}`;
+  else if(ext==='py')cmd=`python ${shellQuote(activePath)}`;
+  else if(ext==='ps1')cmd=`powershell -ExecutionPolicy Bypass -File ${shellQuote(activePath)}`;
+  else if(['bat','cmd'].includes(ext))cmd=`cmd /c ${shellQuote(activePath)}`;
+  else if(ext==='php')cmd=`php ${shellQuote(activePath)}`;
+  else return showInfo('Ejecutar','No hay ejecutor configurado para <b>'+escapeHtml(ext||'este tipo de archivo')+'</b>. Instala Runner para más lenguajes.');
+  await newTerminal('powershell');debugLog.push('Ejecutando '+activePath);await execPersistentTerminal(cmd);setStatus('Ejecutando '+basename(activePath));
+}
 const commands=[
 {name:'Archivo: Nuevo archivo',hint:'',run:createNewFile},{name:'Archivo: Abrir archivo...',hint:'Ctrl+O',run:openFiles},{name:'Archivo: Abrir carpeta...',hint:'Ctrl+K Ctrl+O',run:openWorkspace},{name:'Archivo: Guardar',hint:'Ctrl+S',run:saveActive},{name:'Archivo: Guardar todo',hint:'Ctrl+Shift+S',run:saveAll},{name:'Archivo: Cerrar editor',hint:'Ctrl+W',run:()=>activePath&&closeTab(activePath)},
 {name:'Scratch: Abrir editor de bloques',hint:'',run:()=>openScratchMode()},{name:'Ver: Explorador',hint:'Ctrl+Shift+E',run:()=>setSideMode('explorer')},{name:'Ver: Buscar',hint:'Ctrl+Shift+F',run:()=>setSideMode('search')},{name:'Ver: Control de código fuente',hint:'Ctrl+Shift+G',run:()=>setSideMode('scm')},{name:'Ver: Extensiones',hint:'Ctrl+Shift+X',run:()=>setSideMode('extensions')},{name:'Ver: Alternar barra lateral',hint:'Ctrl+B',run:()=>toggleSidebar()},{name:'Ver: Alternar panel',hint:'Ctrl+J',run:()=>togglePanel()},
-{name:'Ejecutar: Archivo activo',hint:'F5',run:runActiveFile},{name:'Terminal: Nueva PowerShell',hint:'',run:()=>newTerminal('powershell')},{name:'Terminal: Nueva CMD',hint:'',run:()=>newTerminal('cmd')},{name:'Terminal: Cerrar activa',hint:'',run:closeActiveTerminal},{name:'Git: Actualizar estado',hint:'',run:updateGit},{name:'Archivo: Revelar en Explorador',hint:'',run:()=>activePath&&window.axiom.reveal(activePath)},
+{name:'Ejecutar: Archivo activo',hint:'F5',run:runActiveFile},{name:'Runner: Abrir',hint:'',run:openRunnerMode},{name:'Runner: Detener ejecución',hint:'',run:stopRunner},{name:'Terminal: Nueva PowerShell',hint:'',run:()=>newTerminal('powershell')},{name:'Terminal: Nueva CMD',hint:'',run:()=>newTerminal('cmd')},{name:'Terminal: Cerrar activa',hint:'',run:closeActiveTerminal},{name:'Git: Actualizar estado',hint:'',run:updateGit},{name:'Archivo: Revelar en Explorador',hint:'',run:()=>activePath&&window.axiom.reveal(activePath)},
 {name:'Editor: Formatear documento',hint:'Shift+Alt+F',run:()=>editor?.getAction('editor.action.formatDocument')?.run()},{name:'Editor: Ir a línea',hint:'Ctrl+G',run:()=>editor?.getAction('editor.action.gotoLine')?.run()},{name:'Editor: Buscar',hint:'Ctrl+F',run:()=>editor?.getAction('actions.find')?.run()},{name:'Editor: Reemplazar',hint:'Ctrl+H',run:()=>editor?.getAction('editor.action.startFindReplaceAction')?.run()},{name:'Preferencias: Settings',hint:'Ctrl+,',run:()=>window.AxiomPreferences?.open('settings')},{name:'Preferencias: Keyboard Shortcuts',hint:'Ctrl+K Ctrl+S',run:()=>window.AxiomPreferences?.open('keybindings')},{name:'Preferencias: Profiles',hint:'',run:()=>window.AxiomPreferences?.open('profiles')},{name:'Preferencias: Backup and Sync Settings',hint:'',run:()=>window.AxiomPreferences?.open('backup')},{name:'Ayuda: Buscar actualizaciones',hint:'',run:()=>checkForAppUpdates(true)}
 ];
 function showPalette(mode='commands'){paletteMode=mode;$('#overlay').classList.remove('hidden');const input=$('#paletteInput');input.value='';input.placeholder=mode==='files'?'Buscar archivo por nombre...':'Escribe un comando...';buildPalette('');input.focus();}
@@ -155,7 +235,7 @@ edit:[['Deshacer',()=>editor?.trigger('menu','undo')],['Rehacer',()=>editor?.tri
 selection:[['Seleccionar todo',()=>editor?.trigger('menu','selectAll')]],
 view:[['Modo Scratch (bloques)',()=>openScratchMode()],['Explorador',()=>setSideMode('explorer')],['Buscar',()=>setSideMode('search')],['Control de código fuente',()=>setSideMode('scm')],['Ejecutar y depurar',()=>setSideMode('run')],['Extensiones',()=>setSideMode('extensions')],['Alternar barra lateral',()=>toggleSidebar()],['Alternar panel',()=>togglePanel()],['Paleta de comandos',()=>showPalette('commands')]],
 go:[['Ir al archivo...',()=>showPalette('files')],['Ir a línea...',()=>editor?.getAction('editor.action.gotoLine')?.run()]],
-run:[['Ejecutar archivo activo',runActiveFile],['Abrir vista Ejecutar y depurar',()=>setSideMode('run')]],
+run:[['Ejecutar archivo activo',runActiveFile],['Abrir Runner',openRunnerMode],['Detener ejecución',stopRunner],['Abrir vista Ejecutar y depurar',()=>setSideMode('run')]],
 terminal:[['Nueva PowerShell',()=>newTerminal('powershell')],['Nuevo Command Prompt',()=>newTerminal('cmd')],['Cerrar terminal activa',closeActiveTerminal],['Mostrar/ocultar panel',()=>togglePanel()]],
 help:[['Buscar actualizaciones...',()=>checkForAppUpdates(true)],['Acerca de AxiomCode',async()=>{const i=await window.axiom.appInfo();showInfo('AxiomCode',`<p>Versión ${escapeHtml(i.version)}</p><p>Electron ${escapeHtml(i.electron)} · Node ${escapeHtml(i.node)}</p><p>Editor inspirado en la arquitectura visual de VS Code.</p>`);}]]};
 function closeMenus(){document.querySelector('.app-menu')?.remove();$$('.menubar button').forEach(b=>b.classList.remove('menu-open'));}

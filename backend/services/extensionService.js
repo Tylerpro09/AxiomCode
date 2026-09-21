@@ -2,16 +2,24 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
+const AdmZip = require('adm-zip');
 const {scanExtensionFiles,combineSecurityReports,assertExtensionSafe,shouldInspectFile}=require('./extensionSecurity');
 
 const DEFAULT_MARKETPLACE_URL = 'https://axiomcode-marketplace.onrender.com/api/catalog';
 const MAX_CATALOG_BYTES = Number.POSITIVE_INFINITY;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_EXTENSION_ARCHIVE_BYTES = 512 * 1024 * 1024;
+const MAX_EXTENSION_TOTAL_BYTES = 512 * 1024 * 1024;
+const TRUSTED_OFFICIAL_REPOSITORIES = new Map([
+  ['axiom.scratch-mode',{owner:'Tylerpro09',repo:'AxiomCode',subdir:'extensions/scratch-mode'}],
+  ['axiom.runner',{owner:'Tylerpro09',repo:'AxiomCode',subdir:'extensions/runner'}]
+]);
 
 class AxiomExtensionService {
   constructor(app, appRoot) {
     this.appRoot = appRoot;
-    this.catalogRoot = path.join(appRoot, 'extensions');
+    // Official/community extensions are not bundled with the application package.
+    // Development sources may live under appRoot/extensions, but runtime discovery uses userData only.
     this.userRoot = path.join(app.getPath('userData'), 'extensions');
     this.statePath = path.join(app.getPath('userData'), 'extension-state.json');
     this.marketplaceCachePath = path.join(app.getPath('userData'), 'marketplace-cache.json');
@@ -73,7 +81,9 @@ class AxiomExtensionService {
       const dir = path.join(root, entry.name);
       try {
         const manifest = JSON.parse(await fsp.readFile(path.join(dir, 'extension.json'), 'utf8'));
-        const security=scope==='user'?await this.scanDirectorySecurity(dir):null;
+        const state=await this.readState();
+        const trustedInstall=scope==='user'&&state.security?.[manifest.id]?.verdict&&state.security[manifest.id].verdict!=='blocked';
+        const security=scope==='user'?(trustedInstall?state.security[manifest.id]:await this.scanDirectorySecurity(dir)):null;
         result.push({
           scope, path:dir, folder:entry.name, id:manifest.id||entry.name, name:manifest.name||entry.name,
           version:manifest.version||'0.0.0', description:manifest.description||'', manifestEnabled:manifest.enabled!==false,
@@ -87,7 +97,7 @@ class AxiomExtensionService {
 
   async entries() {
     await this.ensure();
-    return [...await this.scanRoot(this.catalogRoot,'catalog'), ...await this.scanRoot(this.userRoot,'user')];
+    return this.scanRoot(this.userRoot,'user');
   }
 
   async list() {
@@ -102,6 +112,23 @@ class AxiomExtensionService {
 
   async isInstalled(id) {
     return Boolean((await this.list()).find(x=>x.id===id)?.installed);
+  }
+
+  async installedEntry(id) {
+    const item=(await this.list()).find(x=>x.id===id&&x.installed&&x.enabled);
+    return item||null;
+  }
+
+  async readInstalledText(id, relativePath, maxBytes=8*1024*1024) {
+    const item=await this.installedEntry(id);
+    if(!item)throw new Error('La extensión no está instalada');
+    const rel=this.safeRelativeFile(relativePath);
+    const full=path.resolve(item.path,...rel.split('/'));
+    const root=path.resolve(item.path)+path.sep;
+    if(!full.startsWith(root))throw new Error('Ruta de extensión no permitida');
+    const stat=await fsp.stat(full);
+    if(!stat.isFile()||stat.size>maxBytes)throw new Error('Recurso de extensión no válido');
+    return fsp.readFile(full,'utf8');
   }
 
   normalizeMarketplace(data, source) {
@@ -199,7 +226,90 @@ class AxiomExtensionService {
     return clean;
   }
 
+  parseRepositoryInstall(entry) {
+    const install=entry?.install;
+    if(!install||install.kind!=='repository')throw new Error('La extensión no usa instalación desde repositorio');
+    const match=/^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(String(install.repoUrl||''));
+    if(!match)throw new Error('Repositorio de extensión no válido');
+    const ref=String(install.ref||'main').trim();
+    if(!/^[A-Za-z0-9._\/-]{1,120}$/.test(ref)||ref.includes('..'))throw new Error('Referencia de repositorio no válida');
+    const subdir=String(install.subdir||'').replace(/\\/g,'/').replace(/^\/+|\/+$/g,'');
+    if(!subdir||subdir.split('/').some(x=>!x||x==='.'||x==='..'))throw new Error('Subcarpeta de extensión no válida');
+    return {owner:match[1],repo:match[2],ref,subdir};
+  }
+
+  isTrustedOfficialRepository(entry,spec) {
+    const trusted=TRUSTED_OFFICIAL_REPOSITORIES.get(entry?.id);
+    return Boolean(trusted && String(entry?.publisher||'')==='AxiomCode' && spec.owner===trusted.owner && spec.repo===trusted.repo && spec.subdir===trusted.subdir);
+  }
+
+  async downloadRepositoryExtension(entry) {
+    const spec=this.parseRepositoryInstall(entry);
+    const trustedOfficial=this.isTrustedOfficialRepository(entry,spec);
+    const archiveUrl='https://codeload.github.com/'+encodeURIComponent(spec.owner)+'/'+encodeURIComponent(spec.repo)+'/zip/'+encodeURIComponent(spec.ref);
+    const bytes=await this.fetchText(archiveUrl,MAX_EXTENSION_ARCHIVE_BYTES,300000);
+    const zip=new AdmZip(bytes);
+    const all=zip.getEntries();
+    if(!all.length)throw new Error('El repositorio descargado está vacío');
+    const root=(all[0].entryName.split('/')[0]||'').trim();
+    if(!root)throw new Error('Archivo de repositorio no válido');
+    const prefix=root+'/'+spec.subdir+'/';
+    const selected=all.filter(x=>!x.isDirectory&&x.entryName.startsWith(prefix));
+    if(!selected.length)throw new Error('La extensión no existe en la subcarpeta indicada del repositorio');
+    if(selected.length>10000)throw new Error('La extensión contiene demasiados archivos');
+
+    await this.ensure();
+    const temp=path.join(this.userRoot,'.install-'+crypto.randomBytes(8).toString('hex'));
+    const target=path.join(this.userRoot,entry.id);
+    const backup=target+'.backup-'+Date.now();
+    const securityReports=[];
+    let total=0,backedUp=false,securityReport=null;
+    await fsp.mkdir(temp,{recursive:true});
+    try{
+      for(const item of selected){
+        const rel=this.safeRelativeFile(item.entryName.slice(prefix.length));
+        const declared=Number(item.header?.size||0);
+        if(declared>MAX_FILE_BYTES)throw new Error('Archivo demasiado grande: '+rel);
+        if(total+declared>MAX_EXTENSION_TOTAL_BYTES)throw new Error('La extensión supera el tamaño máximo permitido');
+        const content=item.getData();
+        if(content.length>MAX_FILE_BYTES)throw new Error('Archivo demasiado grande: '+rel);
+        total+=content.length;
+        if(total>MAX_EXTENSION_TOTAL_BYTES)throw new Error('La extensión supera el tamaño máximo permitido');
+        if(shouldInspectFile(rel))securityReports.push(scanExtensionFiles([{path:rel,bytes:content}]));
+        const out=path.join(temp,...rel.split('/'));
+        const resolved=path.resolve(out),rootPath=path.resolve(temp)+path.sep;
+        if(!resolved.startsWith(rootPath))throw new Error('Ruta fuera del paquete');
+        await fsp.mkdir(path.dirname(out),{recursive:true});
+        await fsp.writeFile(out,content);
+      }
+      securityReport=combineSecurityReports(securityReports);
+      if(securityReport.verdict==='blocked'&&!trustedOfficial){
+        securityReport.quarantineReport=await this.writeQuarantineReport(entry,securityReport,'install');
+        assertExtensionSafe(securityReport);
+      }
+      if(securityReport.verdict==='blocked'&&trustedOfficial){
+        securityReport={...securityReport,originalVerdict:'blocked',verdict:'trusted',trustedSource:true,trustReason:'official-repository'};
+      }
+      const manifest=JSON.parse(await fsp.readFile(path.join(temp,'extension.json'),'utf8'));
+      if(manifest.id!==entry.id)throw new Error('El ID del paquete no coincide con la marketplace');
+      if(String(manifest.version||'')!==entry.version)throw new Error('La versión del paquete no coincide con la marketplace');
+      if(fs.existsSync(target)){await fsp.rename(target,backup);backedUp=true;}
+      await fsp.rename(temp,target);
+      if(backedUp)await fsp.rm(backup,{recursive:true,force:true});
+      const state=await this.readState();
+      state.installed||={};state.security||={};state.installed[entry.id]=true;
+      state.security[entry.id]={engine:securityReport?.engine||'AxiomGuard Static 1.0',verdict:securityReport?.verdict||'clean',score:securityReport?.score||0,scannedAt:new Date().toISOString(),version:entry.version,hashes:securityReport?.hashes||{}};
+      await this.writeState(state);
+      return (await this.list()).find(x=>x.id===entry.id);
+    }catch(error){
+      await fsp.rm(temp,{recursive:true,force:true}).catch(()=>{});
+      if(backedUp&&!fs.existsSync(target))await fsp.rename(backup,target).catch(()=>{});
+      throw error;
+    }
+  }
+
   async downloadMarketplaceExtension(entry) {
+    if(entry?.install?.kind==='repository')return this.downloadRepositoryExtension(entry);
     if (!entry.install || entry.install.kind !== 'files' || !Array.isArray(entry.install.files)) throw new Error('La extensión no tiene un paquete instalable');
     const files = entry.install.files;
     if (!files.length) throw new Error('La extensión no contiene archivos instalables');
@@ -290,3 +400,4 @@ class AxiomExtensionService {
 }
 
 module.exports = { AxiomExtensionService, DEFAULT_MARKETPLACE_URL };
+

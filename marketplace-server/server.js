@@ -325,27 +325,17 @@ async function readFallbackCatalog(){
 }
 function bundledScratchExtension(ext,scratch){
   const version=String(scratch?.version||ext.version||'2.4.1');
-  const description=scratch?.description||ext.description||'Scratch Power integrado en AxiomCode.';
+  const description=scratch?.description||ext.description||'Scratch Power para AxiomCode.';
   const publisher=scratch?.publisher||ext.publisher||'AxiomCode';
-  const manifest={
-    name:'scratch-mode',displayName:ext.name||'Modo Scratch',publisher:'axiom',version,description,
-    engines:{vscode:'^1.139.0'},main:'./extension.js',categories:['Other'],
-    activationEvents:['onCommand:axiom.scratch.open'],
-    contributes:{commands:[{command:'axiom.scratch.open',title:'AxiomCode: Abrir Scratch Power'}]}
+  return {...ext,version,description,publisher,
+    sourceRepo:'https://github.com/Tylerpro09/AxiomCode',
+    install:{
+      kind:'repository',
+      repoUrl:'https://github.com/Tylerpro09/AxiomCode',
+      ref:'main',
+      subdir:'extensions/scratch-mode'
+    }
   };
-  const extensionJs=[
-    "const vscode=require('vscode');",
-    "function activate(context){",
-    "  const open=()=>vscode.commands.executeCommand('axiomcode.scratch.open');",
-    "  context.subscriptions.push(vscode.commands.registerCommand('axiom.scratch.open',open));",
-    "}",
-    "exports.activate=activate;",
-    "exports.deactivate=()=>{};"
-  ].join('\n');
-  return {...ext,version,description,publisher,install:{
-    kind:'bundled',bundledId:'axiom.scratch-mode',
-    vscode:{manifest,generatedFiles:[{path:'extension.js',content:extensionJs}]}
-  }};
 }
 async function readCatalog(){
   const fallback=await readFallbackCatalog();

@@ -48,14 +48,31 @@ alter table public.marketplace_publications enable row level security;
 insert into public.marketplace_extensions
 (id,name,version,description,publisher,verified,featured,reserved,status,tags,homepage,source_repo,source_commit,icon,install)
 values
-('axiom.scratch-mode','Modo Scratch','2.2.0',
+('axiom.scratch-mode','Modo Scratch','2.4.1',
  'Scratch 3 oficial integrado con proyectos .sb3 y Axiom 3D WebGL.',
  'AxiomCode',true,true,true,'published',
  '["scratch","bloques","3d","educacion"]'::jsonb,
  'https://github.com/Tylerpro09/AxiomCode',null,null,null,
- '{"kind":"bundled","bundledId":"axiom.scratch-mode"}'::jsonb)
+ '{"kind":"repository","repoUrl":"https://github.com/Tylerpro09/AxiomCode","ref":"main","subdir":"extensions/scratch-mode"}'::jsonb)
 on conflict (id) do update set
  name=excluded.name,version=excluded.version,description=excluded.description,
  publisher=excluded.publisher,verified=true,featured=true,reserved=true,
  status='published',tags=excluded.tags,homepage=excluded.homepage,install=excluded.install,
  updated_at=now();
+
+
+-- Runner también vive en el repositorio y se instala desde Marketplace; no va dentro del Setup.
+insert into public.marketplace_extensions
+(id,name,version,description,publisher,verified,featured,reserved,status,tags,homepage,source_repo,source_commit,icon,install)
+values
+('axiom.runner','Runner','1.0.0',
+ 'Ejecutor universal para AxiomCode con detección de runtimes, compilación y terminal integrada.',
+ 'AxiomCode',true,true,true,'published',
+ '["runner","ejecutar","compilar","terminal"]'::jsonb,
+ 'https://github.com/Tylerpro09/AxiomCode','https://github.com/Tylerpro09/AxiomCode',null,null,
+ '{"kind":"repository","repoUrl":"https://github.com/Tylerpro09/AxiomCode","ref":"main","subdir":"extensions/runner"}'::jsonb)
+on conflict (id) do update set
+ name=excluded.name,version=excluded.version,description=excluded.description,
+ publisher=excluded.publisher,verified=true,featured=true,reserved=true,
+ status='published',tags=excluded.tags,homepage=excluded.homepage,
+ source_repo=excluded.source_repo,install=excluded.install,updated_at=now();
