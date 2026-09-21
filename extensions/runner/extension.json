@@ -6,9 +6,18 @@
   "publisher": "AxiomCode",
   "contributes": {
     "commands": [
-      {"command": "runner.open", "title": "Runner: Abrir"},
-      {"command": "runner.runActive", "title": "Runner: Ejecutar archivo activo"},
-      {"command": "runner.stop", "title": "Runner: Detener ejecución"}
+      {
+        "command": "runner.open",
+        "title": "Runner: Abrir"
+      },
+      {
+        "command": "runner.runActive",
+        "title": "Runner: Ejecutar archivo activo"
+      },
+      {
+        "command": "runner.stop",
+        "title": "Runner: Detener ejecución"
+      }
     ]
   },
   "installedByDefault": false

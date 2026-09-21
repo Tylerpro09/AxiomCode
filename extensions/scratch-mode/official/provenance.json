@@ -1,0 +1,7 @@
+{
+  "package": "@scratch/scratch-gui",
+  "version": "15.1.1",
+  "repository": "https://github.com/scratchfoundation/scratch-editor",
+  "commit": "99e4c3faa72b29b67b5e35d75ea72260737b5f6b",
+  "integrity": "sha512-srwu+fVp8KHW7BJbikMjjy5+V5OBc0hH9LGNxQEspWCYPKUD552DI6RcU+Lg6NQaDXj4gRC5OUU3lPZNGS6cTg=="
+}
