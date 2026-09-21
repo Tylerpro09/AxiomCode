@@ -19,6 +19,7 @@
     "test:marketplace": "node --test scripts/test-marketplace.cjs",
     "test:runner": "node --test scripts/test-runner.cjs",
     "test:runner:smoke": "electron scripts/smoke-runner.cjs",
+    "test:dist:no-bundled-extensions": "node scripts/verify-no-bundled-extensions.cjs",
     "test:manage": "electron scripts/smoke-manage-center.cjs"
   },
   "author": "AxiomCode",
