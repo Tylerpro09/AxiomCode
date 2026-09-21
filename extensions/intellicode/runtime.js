@@ -2,7 +2,7 @@
   const api=factory();
   if(typeof module==='object'&&module.exports)module.exports=api;
   if(root)root.AxiomIntelliCode=api;
-})(typeof window!=='undefined'?window:globalThis,function(){
+})(typeof window!=='undefined'?window:null,function(){
   'use strict';
 
   const MAX_MODEL_BYTES=384*1024;
