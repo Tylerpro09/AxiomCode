@@ -552,7 +552,13 @@ async function handler(req,res){
     if(req.method==='GET'&&u.pathname==='/api/catalog'){
       const catalog=await readCatalog();
       const includeExternal=u.searchParams.get('includeExternal')==='1';
-      return json(res,200,includeExternal?catalog:{...catalog,extensions:(catalog.extensions||[]).filter(x=>x.install?.kind!=='external')});
+      const features=new Set(String(u.searchParams.get('features')||'').split(',').map(x=>x.trim()).filter(Boolean));
+      const extensions=(catalog.extensions||[]).filter(x=>{
+        if(x.install?.kind==='external'&&!includeExternal)return false;
+        if(x.requiresFeature&&!features.has(String(x.requiresFeature)))return false;
+        return true;
+      });
+      return json(res,200,{...catalog,extensions});
     }
     if(req.method==='GET'&&u.pathname==='/api/editor/latest')return json(res,200,await latestEditorRelease());
     const updateMatch=u.pathname.match(/^\/api\/update\/([^/]+)\/([^/]+)\/([^/]+)$/);
