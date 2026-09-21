@@ -2,14 +2,14 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
-const AdmZip = require('adm-zip');
 const {scanExtensionFiles,combineSecurityReports,assertExtensionSafe,shouldInspectFile}=require('./extensionSecurity');
 
 const DEFAULT_MARKETPLACE_URL = 'https://axiomcode-marketplace.onrender.com/api/catalog';
 const MAX_CATALOG_BYTES = Number.POSITIVE_INFINITY;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
-const MAX_EXTENSION_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const MAX_EXTENSION_TOTAL_BYTES = 512 * 1024 * 1024;
+const MAX_REPOSITORY_TREE_BYTES = 16 * 1024 * 1024;
+const REPOSITORY_DOWNLOAD_CONCURRENCY = 16;
 const TRUSTED_OFFICIAL_REPOSITORIES = new Map([
   ['axiom.scratch-mode',{owner:'Tylerpro09',repo:'AxiomCode',subdir:'extensions/scratch-mode'}],
   ['axiom.runner',{owner:'Tylerpro09',repo:'AxiomCode',subdir:'extensions/runner'}]
@@ -193,6 +193,28 @@ class AxiomExtensionService {
         catalog.error = error.message;
       }
     }
+
+    // Las extensiones oficiales se distribuyen desde el repositorio, nunca
+    // desde el Setup. El fallback integrado es la autoridad para su origen
+    // de instalación y además garantiza que sigan visibles si la API remota
+    // todavía conserva metadata antigua.
+    const officialFallback=await this.readFallbackCatalog();
+    const merged=new Map(catalog.extensions.map(x=>[x.id,x]));
+    for(const fallbackEntry of officialFallback.extensions){
+      if(!TRUSTED_OFFICIAL_REPOSITORIES.has(fallbackEntry.id))continue;
+      const current=merged.get(fallbackEntry.id);
+      if(!current){
+        merged.set(fallbackEntry.id,fallbackEntry);
+        continue;
+      }
+      const metadata=this.compareVersions(fallbackEntry.version,current.version)>0
+        ? {...current,...fallbackEntry}
+        : {...fallbackEntry,...current};
+      merged.set(fallbackEntry.id,{...metadata,install:fallbackEntry.install});
+    }
+    catalog.extensions=[...merged.values()];
+    if(catalog.source!=='fallback'&&officialFallback.extensions.length)catalog.source=catalog.source+'+official';
+
     const installed = await this.list();
     const byId = new Map(installed.filter(x=>x.installed).map(x=>[x.id,x]));
     catalog.extensions = catalog.extensions.map(x => {
@@ -243,45 +265,85 @@ class AxiomExtensionService {
     return Boolean(trusted && String(entry?.publisher||'')==='AxiomCode' && spec.owner===trusted.owner && spec.repo===trusted.repo && spec.subdir===trusted.subdir);
   }
 
+  async repositorySnapshot(spec) {
+    const base='https://api.github.com/repos/'+encodeURIComponent(spec.owner)+'/'+encodeURIComponent(spec.repo);
+    const commitBytes=await this.fetchText(base+'/commits/'+encodeURIComponent(spec.ref),4*1024*1024,30000);
+    const commit=JSON.parse(commitBytes.toString('utf8'));
+    const commitSha=String(commit?.sha||'');
+    const treeSha=String(commit?.commit?.tree?.sha||'');
+    if(!/^[0-9a-f]{40}$/i.test(commitSha)||!/^[0-9a-f]{40}$/i.test(treeSha))throw new Error('GitHub no devolvió un commit válido para la extensión');
+    const treeBytes=await this.fetchText(base+'/git/trees/'+treeSha+'?recursive=1',MAX_REPOSITORY_TREE_BYTES,60000);
+    const tree=JSON.parse(treeBytes.toString('utf8'));
+    if(tree?.truncated)throw new Error('El árbol del repositorio es demasiado grande para instalarlo de forma segura');
+    if(!Array.isArray(tree?.tree))throw new Error('GitHub no devolvió un árbol de repositorio válido');
+    const prefix=spec.subdir+'/';
+    if(tree.tree.some(x=>x?.path?.startsWith(prefix)&&x.mode==='120000'))throw new Error('La extensión contiene enlaces simbólicos no permitidos');
+    const selected=tree.tree.filter(x=>x?.type==='blob'&&x.path?.startsWith(prefix));
+    if(!selected.length)throw new Error('La extensión no existe en la subcarpeta indicada del repositorio');
+    if(selected.length>10000)throw new Error('La extensión contiene demasiados archivos');
+    let total=0;
+    const files=selected.map(item=>{
+      const rel=this.safeRelativeFile(item.path.slice(prefix.length));
+      const size=Number(item.size||0);
+      if(!Number.isSafeInteger(size)||size<0||size>MAX_FILE_BYTES)throw new Error('Archivo demasiado grande o inválido: '+rel);
+      total+=size;
+      if(total>MAX_EXTENSION_TOTAL_BYTES)throw new Error('La extensión supera el tamaño máximo permitido');
+      const encodedPath=item.path.split('/').map(encodeURIComponent).join('/');
+      return {rel,size,sha:String(item.sha||''),url:'https://raw.githubusercontent.com/'+encodeURIComponent(spec.owner)+'/'+encodeURIComponent(spec.repo)+'/'+commitSha+'/'+encodedPath};
+    });
+    return {commitSha,treeSha,total,files};
+  }
+
   async downloadRepositoryExtension(entry) {
     const spec=this.parseRepositoryInstall(entry);
     const trustedOfficial=this.isTrustedOfficialRepository(entry,spec);
-    const archiveUrl='https://codeload.github.com/'+encodeURIComponent(spec.owner)+'/'+encodeURIComponent(spec.repo)+'/zip/'+encodeURIComponent(spec.ref);
-    const bytes=await this.fetchText(archiveUrl,MAX_EXTENSION_ARCHIVE_BYTES,300000);
-    const zip=new AdmZip(bytes);
-    const all=zip.getEntries();
-    if(!all.length)throw new Error('El repositorio descargado está vacío');
-    const root=(all[0].entryName.split('/')[0]||'').trim();
-    if(!root)throw new Error('Archivo de repositorio no válido');
-    const prefix=root+'/'+spec.subdir+'/';
-    const selected=all.filter(x=>!x.isDirectory&&x.entryName.startsWith(prefix));
-    if(!selected.length)throw new Error('La extensión no existe en la subcarpeta indicada del repositorio');
-    if(selected.length>10000)throw new Error('La extensión contiene demasiados archivos');
+    const snapshot=await this.repositorySnapshot(spec);
 
     await this.ensure();
     const temp=path.join(this.userRoot,'.install-'+crypto.randomBytes(8).toString('hex'));
     const target=path.join(this.userRoot,entry.id);
     const backup=target+'.backup-'+Date.now();
     const securityReports=[];
-    let total=0,backedUp=false,securityReport=null;
+    let backedUp=false,securityReport=null;
     await fsp.mkdir(temp,{recursive:true});
     try{
-      for(const item of selected){
-        const rel=this.safeRelativeFile(item.entryName.slice(prefix.length));
-        const declared=Number(item.header?.size||0);
-        if(declared>MAX_FILE_BYTES)throw new Error('Archivo demasiado grande: '+rel);
-        if(total+declared>MAX_EXTENSION_TOTAL_BYTES)throw new Error('La extensión supera el tamaño máximo permitido');
-        const content=item.getData();
-        if(content.length>MAX_FILE_BYTES)throw new Error('Archivo demasiado grande: '+rel);
-        total+=content.length;
-        if(total>MAX_EXTENSION_TOTAL_BYTES)throw new Error('La extensión supera el tamaño máximo permitido');
-        if(shouldInspectFile(rel))securityReports.push(scanExtensionFiles([{path:rel,bytes:content}]));
-        const out=path.join(temp,...rel.split('/'));
-        const resolved=path.resolve(out),rootPath=path.resolve(temp)+path.sep;
-        if(!resolved.startsWith(rootPath))throw new Error('Ruta fuera del paquete');
-        await fsp.mkdir(path.dirname(out),{recursive:true});
-        await fsp.writeFile(out,content);
-      }
+      let cursor=0,firstError=null;
+      const rootPath=path.resolve(temp)+path.sep;
+      const fetchFile=async file=>{
+        let lastError=null;
+        const maxBytes=Math.min(MAX_FILE_BYTES,Math.max(1024*1024,file.size+64*1024));
+        for(let attempt=0;attempt<3;attempt++){
+          try{return await this.fetchText(file.url,maxBytes,120000);}
+          catch(error){lastError=error;if(attempt<2)await new Promise(r=>setTimeout(r,300*(2**attempt)));}
+        }
+        throw lastError;
+      };
+      const worker=async()=>{
+        while(!firstError){
+          const index=cursor++;
+          if(index>=snapshot.files.length)return;
+          const file=snapshot.files[index];
+          try{
+            const content=await fetchFile(file);
+            if(content.length!==file.size)throw new Error('Tamaño incorrecto para '+file.rel);
+            if(/^[0-9a-f]{40}$/i.test(file.sha)){
+              const header=Buffer.from('blob '+content.length+'\0','utf8');
+              const actual=crypto.createHash('sha1').update(header).update(content).digest('hex');
+              if(actual.toLowerCase()!==file.sha.toLowerCase())throw new Error('Integridad Git incorrecta para '+file.rel);
+            }
+            if(shouldInspectFile(file.rel))securityReports.push(scanExtensionFiles([{path:file.rel,bytes:content}]));
+            const out=path.join(temp,...file.rel.split('/'));
+            const resolved=path.resolve(out);
+            if(!resolved.startsWith(rootPath))throw new Error('Ruta fuera del paquete');
+            await fsp.mkdir(path.dirname(out),{recursive:true});
+            await fsp.writeFile(out,content);
+          }catch(error){firstError=error;return;}
+        }
+      };
+      const workers=Array.from({length:Math.min(REPOSITORY_DOWNLOAD_CONCURRENCY,snapshot.files.length)},()=>worker());
+      await Promise.all(workers);
+      if(firstError)throw firstError;
+
       securityReport=combineSecurityReports(securityReports);
       if(securityReport.verdict==='blocked'&&!trustedOfficial){
         securityReport.quarantineReport=await this.writeQuarantineReport(entry,securityReport,'install');
@@ -298,7 +360,15 @@ class AxiomExtensionService {
       if(backedUp)await fsp.rm(backup,{recursive:true,force:true});
       const state=await this.readState();
       state.installed||={};state.security||={};state.installed[entry.id]=true;
-      state.security[entry.id]={engine:securityReport?.engine||'AxiomGuard Static 1.0',verdict:securityReport?.verdict||'clean',score:securityReport?.score||0,scannedAt:new Date().toISOString(),version:entry.version,hashes:securityReport?.hashes||{}};
+      state.security[entry.id]={
+        engine:securityReport?.engine||'AxiomGuard Static 1.0',
+        verdict:securityReport?.verdict||'clean',
+        score:securityReport?.score||0,
+        scannedAt:new Date().toISOString(),
+        version:entry.version,
+        sourceCommit:snapshot.commitSha,
+        hashes:securityReport?.hashes||{}
+      };
       await this.writeState(state);
       return (await this.list()).find(x=>x.id===entry.id);
     }catch(error){
@@ -400,4 +470,3 @@ class AxiomExtensionService {
 }
 
 module.exports = { AxiomExtensionService, DEFAULT_MARKETPLACE_URL };
-
