@@ -44,28 +44,30 @@
       }
     },
     {
-      "id": "visualstudioexptteam.vscodeintellicode",
-      "name": "Visual Studio IntelliCode",
-      "version": "1.3.2",
-      "description": "Extensión oficial de Microsoft con recomendaciones IntelliSense asistidas por IA para Python, TypeScript/JavaScript y Java. AxiomCode muestra la ficha oficial por referencia; el VSIX no se redistribuye.",
-      "publisher": "VisualStudioExptTeam (Microsoft)",
-      "verified": false,
+      "id": "axiom.intellicode",
+      "name": "Axiom IntelliCode",
+      "version": "1.0.0",
+      "description": "Autocompletado inteligente local creado desde cero para AxiomCode. Aprende del código abierto, combina contexto n-gram, símbolos y plantillas por lenguaje, sin nube ni telemetría.",
+      "publisher": "AxiomCode",
+      "verified": true,
       "featured": true,
+      "requiresFeature": "intellicode",
       "tags": [
         "ai",
+        "autocomplete",
         "intellisense",
+        "local",
         "python",
         "javascript",
         "typescript",
-        "java",
-        "microsoft"
+        "java"
       ],
-      "homepage": "https://marketplace.visualstudio.com/items?itemName=VisualStudioExptTeam.vscodeintellicode",
+      "homepage": "https://github.com/Tylerpro09/AxiomCode/tree/main/extensions/intellicode",
       "install": {
-        "kind": "external",
-        "source": "Visual Studio Marketplace",
-        "url": "https://marketplace.visualstudio.com/items?itemName=VisualStudioExptTeam.vscodeintellicode",
-        "compatibility": "vscode"
+        "kind": "repository",
+        "repoUrl": "https://github.com/Tylerpro09/AxiomCode",
+        "ref": "main",
+        "subdir": "extensions/intellicode"
       }
     }
   ]
