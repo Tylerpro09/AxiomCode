@@ -1,0 +1,26 @@
+{
+  "id": "axiom.intellicode",
+  "name": "Axiom IntelliCode",
+  "version": "1.0.0",
+  "description": "Autocompletado inteligente local creado desde cero para AxiomCode. Aprende del código abierto en el editor, combina contexto n-gram, símbolos y plantillas por lenguaje, sin nube ni telemetría.",
+  "publisher": "AxiomCode",
+  "installedByDefault": false,
+  "keywords": [
+    "ai",
+    "autocomplete",
+    "intellisense",
+    "local",
+    "javascript",
+    "typescript",
+    "python",
+    "java",
+    "rust",
+    "go"
+  ],
+  "contributes": {
+    "commands": [
+      "intellicode.status",
+      "intellicode.rebuild"
+    ]
+  }
+}
