@@ -26,7 +26,8 @@ async function refreshExtensionState(){
   const items=await window.axiom.listExtensions();
   scratchInstalled=Boolean(items.find(x=>x.id==='axiom.scratch-mode'&&x.installed&&x.enabled));
   runnerInstalled=Boolean(items.find(x=>x.id==='axiom.runner'&&x.installed&&x.enabled));
-  const b=$('#scratchBtn');if(b)b.style.display=scratchInstalled?'':'none';
+  if(scratchInstalled&&!scratchAssetsLoaded){try{await ensureScratchAssetsLoaded();}catch(e){logOutput('Scratch: '+e.message);}}
+  const b=$('#scratchBtn');if(b)b.style.display=scratchInstalled&&scratchAssetsLoaded?'':'none';
   return items;
 }
 async function openScratchMode(path){
