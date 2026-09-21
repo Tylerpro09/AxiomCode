@@ -7,7 +7,8 @@ function card(x){
   const icon=x.icon?'<img alt="" src="'+esc(x.icon)+'">':esc((x.name||'A')[0].toUpperCase());
   const tags=(x.tags||[]).slice(0,4).map(t=>'<span class="tag">'+esc(t)+'</span>').join('');
   const guard=x.install?.security?.verdict==='clean'?'<span class="tag">AxiomGuard ✓</span>':'';
-  return '<article class="card"><div class="card-head"><div class="icon">'+icon+'</div><div><h3>'+esc(x.name)+(x.verified?' <span class="verified" title="Verificada">◆</span>':'')+'</h3><div class="publisher">'+esc(x.publisher||'Comunidad')+'</div></div></div><p class="desc">'+esc(x.description||'Sin descripción')+'</p><div class="tags">'+tags+guard+'</div><div class="meta"><span>v'+esc(x.version)+'</span><span>'+esc(x.id)+'</span></div></article>';
+  const external=x.install?.kind==='external'&&x.homepage?'<a class="external-link" href="'+esc(x.homepage)+'" target="_blank" rel="noopener noreferrer">Ver original</a>':'';
+  return '<article class="card"><div class="card-head"><div class="icon">'+icon+'</div><div><h3>'+esc(x.name)+(x.verified?' <span class="verified" title="Verificada">◆</span>':'')+'</h3><div class="publisher">'+esc(x.publisher||'Comunidad')+'</div></div></div><p class="desc">'+esc(x.description||'Sin descripción')+'</p><div class="tags">'+tags+guard+'</div><div class="meta"><span>v'+esc(x.version)+'</span><span>'+esc(x.id)+'</span></div>'+external+'</article>';
 }
 function render(q=''){
   const low=q.trim().toLowerCase();
@@ -45,7 +46,7 @@ async function loadEditorRelease(){
 async function loadCatalog(){
   try{
     let data;
-    try{data=await api('/api/catalog');}
+    try{data=await api('/api/catalog?includeExternal=1');}
     catch{
       const r=await fetch('./catalog.json',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);data=await r.json();
     }
