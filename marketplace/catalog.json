@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "AxiomCode Marketplace",
-  "generatedAt": "2026-09-20T00:00:00Z",
+  "generatedAt": "2026-09-21T04:20:32.758Z",
   "extensions": [
     {
       "id": "axiom.scratch-mode",
@@ -45,6 +45,31 @@
         "repoUrl": "https://github.com/Tylerpro09/AxiomCode",
         "ref": "main",
         "subdir": "extensions/runner"
+      }
+    },
+    {
+      "id": "visualstudioexptteam.vscodeintellicode",
+      "name": "Visual Studio IntelliCode",
+      "version": "1.3.2",
+      "description": "Extensión oficial de Microsoft con recomendaciones IntelliSense asistidas por IA para Python, TypeScript/JavaScript y Java. AxiomCode muestra la ficha oficial por referencia; el VSIX no se redistribuye.",
+      "publisher": "VisualStudioExptTeam (Microsoft)",
+      "verified": false,
+      "featured": true,
+      "tags": [
+        "ai",
+        "intellisense",
+        "python",
+        "javascript",
+        "typescript",
+        "java",
+        "microsoft"
+      ],
+      "homepage": "https://marketplace.visualstudio.com/items?itemName=VisualStudioExptTeam.vscodeintellicode",
+      "install": {
+        "kind": "external",
+        "source": "Visual Studio Marketplace",
+        "url": "https://marketplace.visualstudio.com/items?itemName=VisualStudioExptTeam.vscodeintellicode",
+        "compatibility": "vscode"
       }
     }
   ]
