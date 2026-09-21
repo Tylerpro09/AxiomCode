@@ -28,7 +28,7 @@ function splitId(entry){
   return {publisher,name};
 }
 function iso(v){const d=new Date(v||Date.now());return Number.isNaN(d.getTime())?new Date().toISOString():d.toISOString();}
-function native(entry){return entry&&entry.install&&entry.install.kind==='vscode-files'&&entry.install.vscode&&entry.install.vscode.manifest;}
+function native(entry){return Boolean(entry&&entry.install&&entry.install.vscode&&entry.install.vscode.manifest);}
 function properties(entry){
   const v=entry.install.vscode||{},m=v.manifest||{};
   const out=[
@@ -174,9 +174,19 @@ async function streamVsix(entry,res){
   zip.addBuffer(Buffer.from(contentTypes),'[Content_Types].xml');
   zip.addBuffer(Buffer.from(vsixManifest(entry)),'extension.vsixmanifest');
   const files=entry.install.files||[];
-  for(const file of files){
+  const generated=entry.install.vscode?.generatedFiles||[];
+  const generatedPaths=new Set();
+  const hasPackage=files.some(file=>String(file.path||'').replace(/\\/g,'/').replace(/^\/+/,'')==='package.json');
+  if(!hasPackage)zip.addBuffer(Buffer.from(JSON.stringify(manifest(entry),null,2)),'extension/package.json');
+  for(const file of generated){
     const rel=String(file.path||'').replace(/\\/g,'/').replace(/^\/+/,'');
     if(!rel||rel.includes('..')||rel.startsWith('.git/'))continue;
+    generatedPaths.add(rel);
+    zip.addBuffer(Buffer.from(String(file.content||'')),'extension/'+rel);
+  }
+  for(const file of files){
+    const rel=String(file.path||'').replace(/\\/g,'/').replace(/^\/+/,'');
+    if(!rel||rel.includes('..')||rel.startsWith('.git/')||generatedPaths.has(rel))continue;
     const response=await fetch(file.url,{headers:{'User-Agent':'AxiomCode-Gallery-VSIX/1'},signal:AbortSignal.timeout(120000)});
     if(!response.ok)throw new Error('No se pudo empaquetar '+rel+': HTTP '+response.status);
     const len=Number(response.headers.get('content-length')||file.size||0);
