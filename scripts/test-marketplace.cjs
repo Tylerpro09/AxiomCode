@@ -45,6 +45,32 @@ test('Runner is absent from runtime until installed into userData',async()=>{
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 
+test('official repository metadata overrides stale bundled online catalog',async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'axiom-market-'));
+  try{
+    const service=new AxiomExtensionService(fakeApp(dir),path.resolve(__dirname,'..'));
+    service.fetchText=async()=>Buffer.from(JSON.stringify({
+      schemaVersion:1,
+      name:'stale',
+      extensions:[{
+        id:'axiom.scratch-mode',
+        name:'Modo Scratch',
+        version:'2.2.0',
+        publisher:'AxiomCode',
+        install:{kind:'bundled',bundledId:'axiom.scratch-mode'}
+      }]
+    }));
+    const catalog=await service.marketplace(true);
+    const scratch=catalog.extensions.find(x=>x.id==='axiom.scratch-mode');
+    const runner=catalog.extensions.find(x=>x.id==='axiom.runner');
+    assert.ok(scratch);
+    assert.ok(runner);
+    assert.equal(scratch.version,'2.4.1');
+    assert.equal(scratch.install.kind,'repository');
+    assert.equal(runner.install.kind,'repository');
+  }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
 test('package path traversal is rejected',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'axiom-market-'));
   try{
