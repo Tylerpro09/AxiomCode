@@ -1,6 +1,6 @@
 {
   "name": "axiomcode",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "AxiomCode - advanced desktop code editor",
   "main": "main.js",
   "scripts": {
@@ -9,7 +9,7 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "postinstall": "node scripts/ensure-electron.cjs && electron-builder install-app-deps",
-    "test": "npm run test:marketplace && npm run test:scratch && npm run test:runner",
+    "test": "npm run test:marketplace && npm run test:scratch && npm run test:runner && npm run test:intellicode",
     "test:scratch": "node --test scripts/test-scratch.cjs",
     "test:scratch:smoke": "electron scripts/smoke-scratch.cjs",
     "test:scratch:official": "electron scripts/smoke-scratch-official.cjs",
@@ -20,7 +20,8 @@
     "test:runner": "node --test scripts/test-runner.cjs",
     "test:runner:smoke": "electron scripts/smoke-runner.cjs",
     "test:dist:no-bundled-extensions": "node scripts/verify-no-bundled-extensions.cjs",
-    "test:manage": "electron scripts/smoke-manage-center.cjs"
+    "test:manage": "electron scripts/smoke-manage-center.cjs",
+    "test:intellicode": "node --test scripts/test-intellicode.cjs"
   },
   "author": "AxiomCode",
   "license": "MIT",
