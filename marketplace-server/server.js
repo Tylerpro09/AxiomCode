@@ -10,6 +10,23 @@ const {URL}=require('url');
 const {scanExtensionFiles,combineSecurityReports,assertExtensionSafe,shouldInspectFile}=require('../backend/services/extensionSecurity');
 const vscodeGallery=require('./vscodeGallery');
 
+// Temporary build-time validation for the new local IntelliCode integration.
+// It parses desktop sources without executing Electron code and exercises the
+// prediction engine. Removed after Render confirms this revision boots cleanly.
+(function validateAxiomIntelliCodeBuild(){
+  const vm=require('vm');
+  for(const rel of ['../src/renderer.js','../backend/services/extensionService.js','../main.js','../preload.js']){
+    const file=path.resolve(__dirname,rel);
+    new vm.Script(fs.readFileSync(file,'utf8'),{filename:file});
+  }
+  const runtime=require('../extensions/intellicode/runtime.js');
+  if(typeof runtime.LocalIntelliEngine!=='function')throw new Error('Axiom IntelliCode runtime inválido');
+  const engine=new runtime.LocalIntelliEngine();
+  engine.learnText('alpha beta gamma alpha beta gamma alpha beta delta','javascript');
+  const best=engine.suggestTokens(['alpha','beta'],'g',1)[0];
+  if(!best||best.value!=='gamma')throw new Error('Axiom IntelliCode self-test falló');
+})();
+
 const PORT=Number(process.env.PORT||3000);
 const GITHUB_OWNER=process.env.GITHUB_OWNER||'Tylerpro09';
 const GITHUB_REPO=process.env.GITHUB_REPO||'AxiomCode';
