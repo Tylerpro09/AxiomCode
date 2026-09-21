@@ -549,7 +549,11 @@ async function handler(req,res){
   const u=new URL(req.url,'http://localhost');
   try{
     if(req.method==='GET'&&u.pathname==='/health')return json(res,200,{ok:true,service:'axiomcode-marketplace',supabase:Boolean(SUPABASE_URL&&SUPABASE_SECRET_KEY),axiomGuard:true,virusTotal:Boolean(VIRUSTOTAL_API_KEY)});
-    if(req.method==='GET'&&u.pathname==='/api/catalog')return json(res,200,await readCatalog());
+    if(req.method==='GET'&&u.pathname==='/api/catalog'){
+      const catalog=await readCatalog();
+      const includeExternal=u.searchParams.get('includeExternal')==='1';
+      return json(res,200,includeExternal?catalog:{...catalog,extensions:(catalog.extensions||[]).filter(x=>x.install?.kind!=='external')});
+    }
     if(req.method==='GET'&&u.pathname==='/api/editor/latest')return json(res,200,await latestEditorRelease());
     const updateMatch=u.pathname.match(/^\/api\/update\/([^/]+)\/([^/]+)\/([^/]+)$/);
     if(req.method==='GET'&&updateMatch){
