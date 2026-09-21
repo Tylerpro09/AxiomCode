@@ -57,5 +57,6 @@ contextBridge.exposeInMainWorld('axiom', {
   prepareRunner: path => ipcRenderer.invoke('runner:prepare', path),
   onWorkspaceFileChanged: cb => ipcRenderer.on('workspace:fileChanged', (_e, data) => cb(data)),
   reveal: p => ipcRenderer.invoke('system:reveal', p),
+  openExternal: url => ipcRenderer.invoke('system:openExternal', url),
   rendererReady: info => ipcRenderer.send('renderer:ready', info)
 });
