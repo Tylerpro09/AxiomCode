@@ -6,7 +6,7 @@ const {AxiomExtensionService,DEFAULT_MARKETPLACE_URL}=require('../backend/servic
 function fakeApp(root){return {getPath(name){assert.equal(name,'userData');return root;}}}
 
 test('AxiomCode uses Render marketplace API by default',()=>{
-  assert.equal(DEFAULT_MARKETPLACE_URL,'https://axiomcode-marketplace.onrender.com/api/catalog?includeExternal=1');
+  assert.equal(DEFAULT_MARKETPLACE_URL,'https://axiomcode-marketplace.onrender.com/api/catalog?features=intellicode');
 });
 
 test('fallback catalog exposes repository extensions',async()=>{
@@ -16,12 +16,12 @@ test('fallback catalog exposes repository extensions',async()=>{
     const fallback=await service.readFallbackCatalog();
     const scratch=fallback.extensions.find(x=>x.id==='axiom.scratch-mode');
     const runner=fallback.extensions.find(x=>x.id==='axiom.runner');
-    const intellicode=fallback.extensions.find(x=>x.id==='visualstudioexptteam.vscodeintellicode');
+    const intellicode=fallback.extensions.find(x=>x.id==='axiom.intellicode');
     assert.ok(scratch);
     assert.ok(runner);
     assert.ok(intellicode);
-    assert.equal(intellicode.version,'1.3.2');
-    assert.equal(intellicode.install.kind,'external');
+    assert.equal(intellicode.version,'1.0.0');
+    assert.equal(intellicode.install.kind,'repository');
     assert.match(intellicode.install.url,/marketplace\.visualstudio\.com/);
     assert.equal(scratch.install.kind,'repository');
     assert.equal(runner.install.kind,'repository');
