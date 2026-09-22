@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const {scanExtensionFiles,combineSecurityReports,assertExtensionSafe,shouldInspectFile}=require('./extensionSecurity');
 
-const DEFAULT_MARKETPLACE_URL = 'https://axiomcode-marketplace.onrender.com/api/catalog?features=rendererRuntime';
+const DEFAULT_MARKETPLACE_URL = 'https://axiomcode-marketplace.onrender.com/api/catalog?features=rendererRuntime,rendererRuntimeNetwork';
 const MAX_CATALOG_BYTES = Number.POSITIVE_INFINITY;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_EXTENSION_TOTAL_BYTES = 512 * 1024 * 1024;
