@@ -29,13 +29,18 @@ app.whenReady().then(async()=>{try{
     useWorkspace(opened,false);
     const before=await window.axiom.searchWorkspace(root,'foo',{matchCase:false});
     const caseOnly=await window.axiom.searchWorkspace(root,'foo',{matchCase:true});
+    const partial=await window.axiom.searchWorkspace(root,'oo',{matchCase:true});
+    const whole=await window.axiom.searchWorkspace(root,'oo',{matchCase:true,wholeWord:true});
+    const regexRows=await window.axiom.searchWorkspace(root,'f.o',{matchCase:true,regex:true});
     const replaced=await window.axiom.replaceWorkspace(root,'foo','bar',{matchCase:true});
     const after=await window.axiom.searchWorkspace(root,'foo',{matchCase:true});
     const bars=await window.axiom.searchWorkspace(root,'bar',{matchCase:true});
+    const regexReplaced=await window.axiom.replaceWorkspace(root,'b(ar)','x$1',{matchCase:true,regex:true});
+    const xars=await window.axiom.searchWorkspace(root,'xar',{matchCase:true});
     await openFile(root+'\\\\src\\\\alpha.js');
     setSideMode('search');
     await new Promise(r=>setTimeout(r,100));
-    const searchReplaceUi=Boolean(document.querySelector('#sideReplaceInput')&&document.querySelector('#replaceAllBtn')&&document.querySelector('#searchCaseBtn'));
+    const searchReplaceUi=Boolean(document.querySelector('#sideReplaceInput')&&document.querySelector('#replaceAllBtn')&&document.querySelector('#searchCaseBtn')&&document.querySelector('#searchWordBtn')&&document.querySelector('#searchRegexBtn'));
     const actionIds=['editor.action.rename','editor.action.quickFix','editor.action.triggerSuggest','editor.action.quickOutline','editor.action.marker.next'];
     const actions=Object.fromEntries(actionIds.map(id=>[id,Boolean(editor.getAction(id))]));
     const js=editor.getModel();
@@ -57,9 +62,14 @@ app.whenReady().then(async()=>{try{
     return {
       before:before.length,
       caseOnly:caseOnly.length,
+      partial:partial.length,
+      whole:whole.length,
+      regexRows:regexRows.length,
       replaced,
       after:after.length,
       bars:bars.length,
+      regexReplaced,
+      xars:xars.length,
       recent:(await window.axiom.recentWorkspaces()).includes(root),
       breadcrumbs:[...document.querySelectorAll('.breadcrumb-item')].map(x=>x.textContent.trim()),
       searchReplaceUi,
@@ -78,8 +88,11 @@ app.whenReady().then(async()=>{try{
   log('RESULT',result);
   if(result.before<3)throw Error('Workspace search did not find expected matches');
   if(result.caseOnly!==3)throw Error('Case-sensitive search failed');
+  if(result.partial!==3||result.whole!==0)throw Error('Whole-word search failed');
+  if(result.regexRows!==3)throw Error('Regex search failed');
   if(result.replaced.replacements!==3||result.replaced.filesChanged<1)throw Error('Workspace replace failed');
   if(result.after!==0||result.bars!==3)throw Error('Workspace replace verification failed');
+  if(result.regexReplaced.replacements!==3||result.xars!==3)throw Error('Regex replace with capture groups failed');
   if(!result.recent)throw Error('Recent workspace integration failed');
   if(result.breadcrumbs.length<2)throw Error('Breadcrumbs did not render path segments');
   if(!result.searchReplaceUi)throw Error('Search/replace UI missing');
@@ -89,6 +102,6 @@ app.whenReady().then(async()=>{try{
   if(!result.peekVisible)throw Error('Peek definition preview failed');
   if(!result.outlineRows?.some(x=>/alphaSymbol/.test(x)))throw Error('Outline view failed');
   if(!result.commandCoverage)throw Error('Command palette coverage missing');
-  log('PASS search/replace, recent workspaces, breadcrumbs, editor navigation/actions');
+  log('PASS search/replace regex/whole-word, recent workspaces, breadcrumbs, editor navigation/actions');
   finish(0);
 }catch(error){log(error.stack||error);finish(1)}});
