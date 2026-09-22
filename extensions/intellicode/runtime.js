@@ -5,7 +5,7 @@
 })(typeof window!=='undefined'?window:null,function(){
   'use strict';
 
-  const VERSION='1.1.0';
+  const VERSION='1.2.0';
   const MAX_MODEL_BYTES=512*1024;
   const MAX_TOTAL_BYTES=6*1024*1024;
   const MAX_CONTEXTS=32000;
@@ -36,6 +36,11 @@
     '.git','.hg','.svn','node_modules','vendor','dist','build','out','target','.next',
     '.cache','coverage','.idea','.vscode','__pycache__','.venv','venv','bin','obj'
   ]);
+  const SKIP_FILES=new Set([
+    'package-lock.json','yarn.lock','pnpm-lock.yaml','composer.lock','cargo.lock',
+    'poetry.lock','pipfile.lock','bun.lock','bun.lockb'
+  ]);
+  const GENERATED_FILE_RE=/(?:^|[._-])(?:min|bundle|generated|vendor)(?:[._-]|$)|\.map$/i;
 
   const TEMPLATES={
     javascript:[
@@ -441,13 +446,21 @@
   let projectBytes=0;
   let cacheLoaded=false;
   let lastProjectError='';
+  let profileOverride='auto';
+  let projectIndexEnabled=true;
 
   function memoryProfile(){
+    const profiles={
+      light:{id:'light',name:'ligero',files:28,bytes:1536*1024,fileBytes:192*1024,concurrency:2},
+      balanced:{id:'balanced',name:'equilibrado',files:64,bytes:4*1024*1024,fileBytes:384*1024,concurrency:4},
+      high:{id:'high',name:'alto',files:96,bytes:6*1024*1024,fileBytes:512*1024,concurrency:5}
+    };
+    if(profileOverride&&profileOverride!=='auto'&&profiles[profileOverride])return profiles[profileOverride];
     let memory=8;
     try{memory=Number(navigator.deviceMemory||8)||8;}catch{}
-    if(memory<=4)return {name:'ligero',files:28,bytes:1536*1024,fileBytes:192*1024,concurrency:2};
-    if(memory>=12)return {name:'alto',files:96,bytes:6*1024*1024,fileBytes:512*1024,concurrency:5};
-    return {name:'equilibrado',files:64,bytes:4*1024*1024,fileBytes:384*1024,concurrency:4};
+    if(memory<=4)return profiles.light;
+    if(memory>=12)return profiles.high;
+    return profiles.balanced;
   }
   function hashText(value){
     let hash=2166136261;
@@ -476,6 +489,16 @@
   function clearCache(rootPath){
     try{localStorage.removeItem(cacheKey(rootPath||projectRoot));}catch{}
   }
+  function filePriority(file){
+    const pathValue=String(file.path||file.name||'').replace(/\\/g,'/');
+    const name=String(file.name||pathValue.split('/').pop()||'').toLowerCase();
+    const depth=Math.max(0,pathValue.split('/').filter(Boolean).length-1);
+    let score=depth*4;
+    if(/^(?:index|main|app|server|client|core|lib|mod)\./.test(name))score-=18;
+    if(/(?:test|spec)\./.test(name))score+=8;
+    if(GENERATED_FILE_RE.test(name))score+=100;
+    return score;
+  }
   function workspaceFiles(tree){
     const out=[];
     const walk=nodes=>{
@@ -484,13 +507,15 @@
           if(SKIP_DIRS.has(String(node.name||'').toLowerCase()))continue;
           walk(node.children||[]);
         }else if(node.type==='file'){
+          const name=String(node.name||'').toLowerCase();
+          if(SKIP_FILES.has(name)||GENERATED_FILE_RE.test(name))continue;
           const language=languageFromPath(node.path||node.name);
           if(language&&SUPPORTED.includes(language))out.push({path:node.path,name:node.name,language});
         }
       }
     };
     walk(tree||[]);
-    return out;
+    return out.sort((a,b)=>filePriority(a)-filePriority(b)||String(a.path).localeCompare(String(b.path)));
   }
   async function readProjectFile(file,maxBytes){
     try{
@@ -507,6 +532,15 @@
     const rootPath=String(workspace?.root||'');
     if(!rootPath||!workspace?.tree){
       projectRoot='';
+      projectFiles=0;
+      projectBytes=0;
+      return status();
+    }
+    if(!projectIndexEnabled){
+      projectRoot=rootPath;
+      projectEngine=new LocalIntelliEngine('project');
+      projectFiles=0;
+      projectBytes=0;
       return status();
     }
     if(!force&&projectRoot===rootPath&&projectFiles>0)return status();
@@ -529,6 +563,7 @@
           bytes+=content.length;
           count++;
         }
+        await new Promise(resolve=>setTimeout(resolve,0));
       }
       projectEngine=next;
       projectRoot=rootPath;
@@ -561,7 +596,26 @@
   }
   function rebuildLive(){
     if(!active||!host)return status();
-    return liveEngine.rebuild(supportedModels());
+    const models=supportedModels();
+    const activeModel=host.editor?.getModel?.();
+    const activeKey=activeModel?.uri?.toString?.()||'';
+    const next=new LocalIntelliEngine('live');
+    next.stats.rebuilds=(liveEngine.stats?.rebuilds||0)+1;
+    const ordered=[...models].sort((a,b)=>{
+      const ak=(a.uri?.toString?.()||'')===activeKey?0:1;
+      const bk=(b.uri?.toString?.()||'')===activeKey?0:1;
+      return ak-bk;
+    }).slice(0,24);
+    for(const model of ordered){
+      let value='';
+      let language='plaintext';
+      try{value=model.getValue();language=model.getLanguageId();}catch{continue;}
+      const isActive=(model.uri?.toString?.()||'')===activeKey;
+      next.learnText(value,language,isActive?4:2);
+      if(isActive&&value.length>12000)next.learnText(value.slice(-12000),language,6);
+    }
+    liveEngine=next;
+    return liveEngine.status();
   }
   function scheduleLiveRebuild(delay=420){
     clearTimeout(liveTimer);
@@ -594,6 +648,27 @@
     if(!MEMBER_OPS.has(contextTokens[contextTokens.length-1]))return null;
     const receiver=contextTokens[contextTokens.length-2];
     return isIdentifier(receiver)?receiver:null;
+  }
+  function scopeSuggestions(contextTokens,prefix='',limit=8){
+    const counts=new Map();
+    const slice=(contextTokens||[]).slice(-160);
+    for(const token of slice){
+      if(!isIdentifier(token)||STOP.has(token.toLowerCase())||token.length<2)continue;
+      counts.set(token,(counts.get(token)||0)+1);
+    }
+    return [...counts.entries()]
+      .map(([value,count])=>({value,score:120+count*8+fuzzyMatch(value,prefix),source:'scope',kind:'variable'}))
+      .filter(row=>fuzzyMatch(row.value,prefix)>0&&row.value!==prefix)
+      .sort((a,b)=>b.score-a.score||a.value.localeCompare(b.value))
+      .slice(0,limit);
+  }
+  function mergeScope(rows,scopeRows,limit=24){
+    const merged=new Map((rows||[]).map(row=>[row.value,row]));
+    for(const row of scopeRows||[]){
+      const old=merged.get(row.value);
+      if(!old||row.score>old.score)merged.set(row.value,row);
+    }
+    return [...merged.values()].sort((a,b)=>b.score-a.score||a.value.localeCompare(b.value)).slice(0,limit);
   }
   function monacoKind(kind){
     const kinds=host.monaco.languages.CompletionItemKind;
@@ -638,7 +713,7 @@
         const options={language,receiver};
         const projectRows=projectEngine.suggestTokens(context,prefix,18,options);
         const liveRows=liveEngine.suggestTokens(context,prefix,18,options);
-        const rows=mergeRows(projectRows,liveRows,20);
+        const rows=mergeScope(mergeRows(projectRows,liveRows,24),scopeSuggestions(context,prefix,10),24);
         const range={
           startLineNumber:position.lineNumber,startColumn:word.startColumn,
           endLineNumber:position.lineNumber,endColumn:position.column
@@ -680,6 +755,24 @@
         const lineBefore=model.getLineContent(position.lineNumber).slice(0,position.column-1);
         if(looksLikeComment(lineBefore,language))return {items:[]};
         const trimmed=lineBefore.trim();
+        if(!trimmed&&position.lineNumber>1){
+          const previous=model.getLineContent(position.lineNumber-1).trim();
+          if(previous){
+            const rows=mergeRows(
+              projectEngine.suggestNextLine(previous,language,3),
+              liveEngine.suggestNextLine(previous,language,3),
+              1
+            );
+            const best=rows[0];
+            if(best?.value)return {items:[{
+              insertText:best.value,
+              range:{
+                startLineNumber:position.lineNumber,startColumn:position.column,
+                endLineNumber:position.lineNumber,endColumn:position.column
+              }
+            }]};
+          }
+        }
         if(trimmed.length>=4){
           const line=bestLineSuggestion(trimmed,language);
           if(line?.value&&line.value.length>trimmed.length){
@@ -730,7 +823,16 @@
     projectFiles=0;
     projectBytes=0;
     projectRoot='';
-    try{enabled=localStorage.getItem('axiom.intellicode.enabled')!=='0';}catch{enabled=true;}
+    try{
+      enabled=localStorage.getItem('axiom.intellicode.enabled')!=='0';
+      projectIndexEnabled=localStorage.getItem('axiom.intellicode.projectIndex')!=='0';
+      profileOverride=localStorage.getItem('axiom.intellicode.profile')||'auto';
+      if(!['auto','light','balanced','high'].includes(profileOverride))profileOverride='auto';
+    }catch{
+      enabled=true;
+      projectIndexEnabled=true;
+      profileOverride='auto';
+    }
     const initialWorkspace=host.getWorkspace?.();
     if(initialWorkspace?.root)loadCache(String(initialWorkspace.root));
     for(const language of SUPPORTED){
@@ -756,7 +858,7 @@
     workspaceTimer=setInterval(()=>{
       if(!active)return;
       const rootNow=String(host.getWorkspace?.()?.root||'');
-      if(rootNow&&rootNow!==projectRoot){
+      if(projectIndexEnabled&&rootNow&&rootNow!==projectRoot){
         projectEngine=new LocalIntelliEngine('project');
         loadCache(rootNow);
         indexWorkspace(true).catch(()=>{});
@@ -783,7 +885,8 @@
     return {
       active,enabled,version:VERSION,supportedLanguages:[...SUPPORTED],
       projectFiles,projectBytes,projectRoot,projectIndexing,lastProjectError,
-      project,live,cacheLoaded,memoryProfile:profile.name,
+      project,live,cacheLoaded,memoryProfile:profile.name,profileMode:profileOverride,
+      projectIndexEnabled,
       models:live.models,
       tokens:project.tokens+live.tokens,
       symbols:new Set([...projectEngine.symbols.keys(),...liveEngine.symbols.keys()]).size,
@@ -801,7 +904,7 @@
         '<p>Proyecto: '+Number(s.projectFiles||0)+' archivos · '+Math.round(Number(s.projectBytes||0)/1024).toLocaleString()+' KiB</p>'+
         '<p>Modelos abiertos: '+Number(s.models||0)+' · tokens: '+Number(s.tokens||0).toLocaleString()+
         ' · símbolos: '+Number(s.symbols||0).toLocaleString()+'</p>'+
-        '<p>Perfil de memoria: '+htmlEscape(s.memoryProfile)+' · caché: '+(s.cacheLoaded?'sí':'no')+'</p>'
+        '<p>Perfil de memoria: '+htmlEscape(s.memoryProfile)+' ('+htmlEscape(s.profileMode)+') · índice de proyecto: '+(s.projectIndexEnabled?'sí':'no')+' · caché: '+(s.cacheLoaded?'sí':'no')+'</p>'
       );
       return s;
     }
@@ -825,6 +928,26 @@
       rebuildLive();
       await indexWorkspace(true);
       host?.status?.('Axiom IntelliCode: aprendizaje local reconstruido');
+      return status();
+    }
+    if(id==='intellicode.profile'){
+      const order=['auto','light','balanced','high'];
+      profileOverride=order[(order.indexOf(profileOverride)+1)%order.length];
+      try{localStorage.setItem('axiom.intellicode.profile',profileOverride);}catch{}
+      if(projectIndexEnabled)await indexWorkspace(true);
+      host?.status?.('Axiom IntelliCode: perfil '+memoryProfile().name+' ('+profileOverride+')');
+      return status();
+    }
+    if(id==='intellicode.projectIndex'){
+      projectIndexEnabled=!projectIndexEnabled;
+      try{localStorage.setItem('axiom.intellicode.projectIndex',projectIndexEnabled?'1':'0');}catch{}
+      if(projectIndexEnabled)await indexWorkspace(true);
+      else{
+        projectEngine=new LocalIntelliEngine('project');
+        projectFiles=0;
+        projectBytes=0;
+      }
+      host?.status?.('Axiom IntelliCode: índice de proyecto '+(projectIndexEnabled?'activado':'desactivado'));
       return status();
     }
     throw new Error('Comando no reconocido: '+id);
