@@ -12,8 +12,10 @@ contextBridge.exposeInMainWorld('axiom', {
   refreshWorkspace: root => ipcRenderer.invoke('workspace:refresh', root),
   restoreWorkspace: () => ipcRenderer.invoke('workspace:restore'),
   recentWorkspaces: () => ipcRenderer.invoke('workspace:recent'),
+  openWorkspacePath: root => ipcRenderer.invoke('workspace:openPath', root),
   openFiles: root => ipcRenderer.invoke('file:openDialog', root),
-  searchWorkspace: (root, query) => ipcRenderer.invoke('workspace:search', root, query),
+  searchWorkspace: (root, query, options = {}) => ipcRenderer.invoke('workspace:search', root, query, options),
+  replaceWorkspace: (root, query, replacement, options = {}) => ipcRenderer.invoke('workspace:replace', root, query, replacement, options),
   getIconManifest: () => ipcRenderer.invoke('icons:manifest'),
   readFile: p => ipcRenderer.invoke('file:read', p),
   writeFile: (p, content) => ipcRenderer.invoke('file:write', p, content),
@@ -58,6 +60,7 @@ contextBridge.exposeInMainWorld('axiom', {
   prepareRunner: path => ipcRenderer.invoke('runner:prepare', path),
   onWorkspaceFileChanged: cb => ipcRenderer.on('workspace:fileChanged', (_e, data) => cb(data)),
   reveal: p => ipcRenderer.invoke('system:reveal', p),
+  clipboardWrite: text => ipcRenderer.invoke('system:clipboardWrite', text),
   openExternal: url => ipcRenderer.invoke('system:openExternal', url),
   rendererReady: info => ipcRenderer.send('renderer:ready', info)
 });
