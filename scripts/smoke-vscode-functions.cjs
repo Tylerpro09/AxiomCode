@@ -79,7 +79,7 @@ app.whenReady().then(async()=>{try{
     setSideMode('search');
     await new Promise(r=>setTimeout(r,100));
     const searchReplaceUi=Boolean(document.querySelector('#sideReplaceInput')&&document.querySelector('#replaceAllBtn')&&document.querySelector('#searchCaseBtn')&&document.querySelector('#searchWordBtn')&&document.querySelector('#searchRegexBtn'));
-    const actionIds=['editor.action.rename','editor.action.quickFix','editor.action.triggerSuggest','editor.action.quickOutline','editor.action.marker.next'];
+    const actionIds=['editor.action.rename','editor.action.quickFix','editor.action.triggerSuggest','editor.action.quickOutline','editor.action.marker.next','editor.action.moveLinesUpAction','editor.action.moveLinesDownAction','editor.action.copyLinesUpAction','editor.action.copyLinesDownAction','editor.action.deleteLines','editor.action.insertLineBefore','editor.action.insertLineAfter','editor.action.commentLine','editor.action.blockComment','editor.fold','editor.unfold','editor.foldAll','editor.unfoldAll','editor.action.insertCursorAbove','editor.action.insertCursorBelow','editor.action.addSelectionToNextFindMatch','editor.action.selectHighlights','editor.action.changeAll'];
     const actions=Object.fromEntries(actionIds.map(id=>[id,Boolean(editor.getAction(id))]));
     const js=editor.getModel();
     js.setValue('function alphaSymbol(){ return 1; }\\nalphaSymbol();');
@@ -133,6 +133,7 @@ app.whenReady().then(async()=>{try{
         'Editor: Cambiar nombre de símbolo','Editor: Acción rápida','Editor: Ir a símbolo...',
         'Proyecto: Buscar y reemplazar','Proyecto: Ir a símbolo en el espacio de trabajo','Archivo: Abrir reciente...','Archivo: Reabrir editor cerrado',
         'Editor: Fijar/desfijar pestaña','Editor: Siguiente editor','Editor: Editor anterior',
+        'Editor: Mover línea arriba','Editor: Duplicar línea abajo','Editor: Alternar comentario de línea','Editor: Plegar todo','Editor: Añadir cursor abajo','Editor: Seleccionar todas las coincidencias',
         'Editor: Cerrar otros editores','Editor: Cerrar editores a la derecha','Navegación: Atrás','Navegación: Adelante'
       ].every(name=>commandNames.includes(name))
     };
