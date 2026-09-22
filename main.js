@@ -415,9 +415,23 @@ ipcMain.handle('scratch:saveSb3', async (_, data) => {
   finally { await fsp.unlink(temporary).catch(() => {}); }
   return filePath;
 });
+function safeRendererSend(channel,payload){
+  const win=mainWindow;
+  if(!win||win.isDestroyed?.())return false;
+  try{
+    const contents=win.webContents;
+    if(!contents||contents.isDestroyed?.())return false;
+    contents.send(channel,payload);
+    return true;
+  }catch{
+    return false;
+  }
+}
 function createWindow() {
-  mainWindow = new BrowserWindow({ width: 1500, height: 920, minWidth: 980, minHeight: 640, backgroundColor: '#1f1f1f', title: 'AxiomCode', icon: path.join(__dirname,'assets','branding','axiomcode-icon.png'), autoHideMenuBar: true, titleBarStyle: 'hidden', titleBarOverlay: { color: '#181818', symbolColor: '#cccccc', height: 35 }, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
-  mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'), {query:process.argv.includes('--scratch') ? {scratch:'1'} : {}});
+  const win = new BrowserWindow({ width: 1500, height: 920, minWidth: 980, minHeight: 640, backgroundColor: '#1f1f1f', title: 'AxiomCode', icon: path.join(__dirname,'assets','branding','axiomcode-icon.png'), autoHideMenuBar: true, titleBarStyle: 'hidden', titleBarOverlay: { color: '#181818', symbolColor: '#cccccc', height: 35 }, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
+  mainWindow=win;
+  win.on('closed',()=>{if(mainWindow===win)mainWindow=null;});
+  win.loadFile(path.join(__dirname, 'src', 'index.html'), {query:process.argv.includes('--scratch') ? {scratch:'1'} : {}});
 }
 async function tree(dir, depth = 0) {
   if (depth > 12) return [];
@@ -426,7 +440,7 @@ async function tree(dir, depth = 0) {
   return Promise.all(visible.map(async e => ({ name: e.name, path: path.join(dir, e.name), type: e.isDirectory() ? 'dir' : 'file', children: e.isDirectory() ? await tree(path.join(dir, e.name), depth + 1) : undefined })));
 }
 function run(command, cwd) { return new Promise(resolve => exec(command, { cwd: cwd || app.getPath('home'), windowsHide: true, shell: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => resolve({ ok: !error, code: error?.code ?? 0, stdout, stderr }))); }
-app.whenReady().then(async()=>{backend=createBackend(app,__dirname,(channel,payload)=>mainWindow?.webContents.send(channel,payload));await backend.configuration.load();createWindow();});
+app.whenReady().then(async()=>{backend=createBackend(app,__dirname,safeRendererSend);await backend.configuration.load();createWindow();});
 app.on('window-all-closed', () => { backend?.watcher.dispose(); scratchService?.close(); if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 ipcMain.handle('workspace:open', async () => { const r = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] }); if (r.canceled) return null; const root = r.filePaths[0]; await backend.workspace.remember(root); backend.watcher.watch(root); return { root, tree: await tree(root) }; });
