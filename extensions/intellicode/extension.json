@@ -18,9 +18,22 @@
     "go"
   ],
   "contributes": {
+    "rendererRuntime": {
+      "entry": "runtime.js",
+      "global": "AxiomIntelliCode",
+      "activation": "startup"
+    },
     "commands": [
-      "intellicode.status",
-      "intellicode.rebuild"
+      {
+        "id": "intellicode.status",
+        "title": "Axiom IntelliCode: Estado",
+        "method": "status"
+      },
+      {
+        "id": "intellicode.rebuild",
+        "title": "Axiom IntelliCode: Reconstruir modelo local",
+        "method": "rebuild"
+      }
     ]
   }
 }
