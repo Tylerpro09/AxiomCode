@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('axiom', {
   gitDiscardFile: (cwd, file) => ipcRenderer.invoke('git:discardFile', cwd, file),
   gitBranches: cwd => ipcRenderer.invoke('git:branches', cwd),
   gitCheckout: (cwd, branch) => ipcRenderer.invoke('git:checkout', cwd, branch),
+  gitShowHead: (cwd, file) => ipcRenderer.invoke('git:showHead', cwd, file),
   appInfo: () => ipcRenderer.invoke('app:info'),
   checkForUpdates: () => ipcRenderer.invoke('app:update:check'),
   installUpdate: () => ipcRenderer.invoke('app:update:install'),
