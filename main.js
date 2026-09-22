@@ -583,6 +583,54 @@ async function replaceInWorkspace(root, query, replacement, options = {}) {
 }
 ipcMain.handle('workspace:search', async (_, root, query, options={}) => searchFiles(root, query, [], options));
 ipcMain.handle('workspace:replace', async (_, root, query, replacement, options={}) => replaceInWorkspace(root, query, replacement, options));
+async function workspaceSymbols(root,query='',results=[],state={files:0}){
+  if(results.length>=1000||state.files>=600)return results;
+  const low=String(query||'').trim().toLowerCase();
+  const patterns=[
+    {kind:'class',re:/^\s*(?:export\s+)?(?:default\s+)?class\s+([A-Za-z_$][\w$]*)/},
+    {kind:'interface',re:/^\s*(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)/},
+    {kind:'enum',re:/^\s*(?:export\s+)?(?:enum|struct|trait)\s+([A-Za-z_$][\w$]*)/},
+    {kind:'function',re:/^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/},
+    {kind:'function',re:/^\s*(?:async\s+)?def\s+([A-Za-z_][\w]*)\s*\(/},
+    {kind:'function',re:/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][\w]*)\s*\(/},
+    {kind:'function',re:/^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)\s*\(/},
+    {kind:'function',re:/^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/},
+    {kind:'method',re:/^\s*(?:(?:public|private|protected|static|final|virtual|override|async|synchronized|abstract|extern)\s+)*(?:[A-Za-z_$][\w$<>\[\],.?]*\s+)+([A-Za-z_$][\w$]*)\s*\([^;]*\)\s*(?:\{|=>)?/}
+  ];
+  const supported=new Set(['js','jsx','mjs','cjs','ts','tsx','py','java','c','h','cpp','cc','cxx','hpp','cs','go','rs','php','dart','kt','kts','swift']);
+  async function walk(dir){
+    if(results.length>=1000||state.files>=600)return;
+    let entries;
+    try{entries=await fsp.readdir(dir,{withFileTypes:true});}catch{return;}
+    for(const entry of entries){
+      if(results.length>=1000||state.files>=600)break;
+      if(['node_modules','.git','dist','out','build','target','.next','coverage','.venv','vendor'].includes(entry.name))continue;
+      const p=path.join(dir,entry.name);
+      if(entry.isDirectory()){await walk(p);continue;}
+      const ext=entry.name.includes('.')?entry.name.split('.').pop().toLowerCase():'';
+      if(!supported.has(ext))continue;
+      try{
+        const st=await fsp.stat(p);if(st.size>2_000_000)continue;
+        state.files++;
+        const lines=(await fsp.readFile(p,'utf8')).split(/\r?\n/);
+        for(let i=0;i<lines.length&&results.length<1000;i++){
+          const line=lines[i];
+          for(const pattern of patterns){
+            const match=pattern.re.exec(line);
+            if(!match)continue;
+            const name=match[1];
+            if(low&&!name.toLowerCase().includes(low))break;
+            results.push({name,kind:pattern.kind,path:p,line:i+1,column:Math.max(1,line.indexOf(name)+1)});
+            break;
+          }
+        }
+      }catch{}
+    }
+  }
+  await walk(root);
+  return results;
+}
+ipcMain.handle('workspace:symbols', async (_,root,query='') => workspaceSymbols(root,query));
 let materialIcons;
 function getMaterialIcons(){
   if(!materialIcons){
