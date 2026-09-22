@@ -6,10 +6,10 @@ const {AxiomExtensionService,DEFAULT_MARKETPLACE_URL}=require('../backend/servic
 function fakeApp(root){return {getPath(name){assert.equal(name,'userData');return root;}}}
 
 test('AxiomCode uses Render marketplace API by default',()=>{
-  assert.equal(DEFAULT_MARKETPLACE_URL,'https://axiomcode-marketplace.onrender.com/api/catalog?features=intellicode');
+  assert.equal(DEFAULT_MARKETPLACE_URL,'https://axiomcode-marketplace.onrender.com/api/catalog?features=rendererRuntime');
 });
 
-test('fallback catalog exposes repository extensions',async()=>{
+test('packaged fallback contains only core repository extensions',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'axiom-market-'));
   try{
     const service=new AxiomExtensionService(fakeApp(dir),path.resolve(__dirname,'..'));
@@ -19,15 +19,22 @@ test('fallback catalog exposes repository extensions',async()=>{
     const intellicode=fallback.extensions.find(x=>x.id==='axiom.intellicode');
     assert.ok(scratch);
     assert.ok(runner);
-    assert.ok(intellicode);
-    assert.equal(intellicode.version,'1.0.0');
-    assert.equal(intellicode.install.kind,'repository');
-    assert.match(intellicode.install.url,/marketplace\.visualstudio\.com/);
+    assert.equal(intellicode,undefined);
     assert.equal(scratch.install.kind,'repository');
     assert.equal(runner.install.kind,'repository');
     assert.equal(scratch.install.subdir,'extensions/scratch-mode');
     assert.equal(runner.install.subdir,'extensions/runner');
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('server catalog exposes IntelliCode only as a repository package',()=>{
+  const serverCatalog=JSON.parse(fs.readFileSync(path.resolve(__dirname,'..','marketplace','catalog.json'),'utf8'));
+  const intellicode=serverCatalog.extensions.find(x=>x.id==='axiom.intellicode');
+  assert.ok(intellicode);
+  assert.equal(intellicode.version,'1.0.0');
+  assert.equal(intellicode.requiresFeature,'rendererRuntime');
+  assert.equal(intellicode.install.kind,'repository');
+  assert.equal(intellicode.install.subdir,'extensions/intellicode');
 });
 
 test('Runner is absent from runtime until installed into userData',async()=>{
