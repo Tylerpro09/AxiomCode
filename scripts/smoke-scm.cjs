@@ -37,6 +37,12 @@ app.whenReady().then(async()=>{try{
   const result=await win.webContents.executeJavaScript(`(async()=>{
     const root=${JSON.stringify(workspace)};
     const initial=await window.axiom.gitChanges(root);
+    useWorkspace(await window.axiom.openWorkspacePath(root),false);
+    const change=parseChanges(initial.stdout)[0];
+    await openGitDiff(change);
+    await new Promise(r=>setTimeout(r,150));
+    const diffVisible=Boolean(document.querySelector('.diff-overlay')&&document.querySelector('.monaco-diff-editor'));
+    document.querySelector('.diff-close')?.click();
     const stage=await window.axiom.gitStageFile(root,'sample.txt');
     const staged=await window.axiom.gitChanges(root);
     const unstage=await window.axiom.gitUnstageFile(root,'sample.txt');
@@ -46,15 +52,16 @@ app.whenReady().then(async()=>{try{
     const status=await window.axiom.gitStatus(root);
     const discard=await window.axiom.gitDiscardFile(root,'sample.txt');
     const clean=await window.axiom.gitChanges(root);
-    return {initial,stage,staged,unstage,unstaged,branches,checkout,status,discard,clean};
+    return {initial,diffVisible,stage,staged,unstage,unstaged,branches,checkout,status,discard,clean};
   })()`);
   log('RESULT',result);
   if(!result.initial.ok||!/ M sample\.txt/.test(result.initial.stdout))throw new Error('Initial unstaged state missing');
+  if(!result.diffVisible)throw new Error('Git diff editor failed to render');
   if(!result.stage.ok||!/^M  sample\.txt/m.test(result.staged.stdout))throw new Error('Stage file failed');
   if(!result.unstage.ok||!/ M sample\.txt/.test(result.unstaged.stdout))throw new Error('Unstage file failed');
   if(!result.branches.ok||!result.branches.stdout.includes('feature'))throw new Error('Branch listing failed');
   if(!result.checkout.ok||!/^## feature/m.test(result.status.stdout))throw new Error('Branch checkout failed');
   if(!result.discard.ok||String(result.clean.stdout).trim())throw new Error('Discard file failed');
-  log('PASS per-file stage, unstage, discard, branches and checkout');
+  log('PASS diff editor, per-file stage, unstage, discard, branches and checkout');
   finish(0);
 }catch(error){log(error?.stack||error);finish(1)}});
