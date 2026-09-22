@@ -40,12 +40,12 @@ app.whenReady().then(async()=>{
     log('PASS watcher event ignored safely after renderer destruction');
 
     guard.destroy();
-    fs.rmSync(temp,{recursive:true,force:true});
+    try{fs.rmSync(temp,{recursive:true,force:true});}catch{}
     app.exit(0);
   }catch(error){
     log(error?.stack||error);
     try{guard?.destroy();}catch{}
-    fs.rmSync(temp,{recursive:true,force:true});
+    try{fs.rmSync(temp,{recursive:true,force:true});}catch{}
     app.exit(1);
   }
 });
