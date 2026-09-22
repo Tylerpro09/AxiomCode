@@ -45,7 +45,7 @@ Funciones IA:
 
 La API key **no forma parte del repositorio, del Setup ni del catálogo de Marketplace**.
 
-La extensión solicita la clave mediante un campo de contraseña y la guarda únicamente en `sessionStorage`, por lo que desaparece al cerrar la sesión del editor.
+La extensión solicita la clave mediante un campo de contraseña y la mantiene únicamente en memoria durante la ejecución. No se escribe en archivos, configuración, Marketplace ni logs; desaparece al descargar la extensión o cerrar el editor.
 
 No se escriben en logs:
 
@@ -109,6 +109,6 @@ extensions/intellicode/
 └─ README.md
 ```
 
-AxiomCode no contiene lógica específica de Victorsia ni de IntelliCode. El programa solo expone el cargador genérico `contributes.rendererRuntime`.
+AxiomCode no contiene lógica específica de Victorsia ni de IntelliCode. El programa expone el cargador genérico `contributes.rendererRuntime` y una API HTTPS genérica con permisos por host para cualquier extensión. Axiom IntelliCode declara únicamente `api.victors.qzz.io` como host de red permitido.
 
 La extensión se descarga desde AxiomCode Marketplace y se instala en el directorio de extensiones del usuario. El Setup de AxiomCode no incluye esta carpeta ni sus archivos.
