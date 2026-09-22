@@ -1,6 +1,6 @@
 {
   "name": "axiomcode",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "AxiomCode - advanced desktop code editor",
   "main": "main.js",
   "scripts": {
