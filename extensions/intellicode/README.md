@@ -30,3 +30,9 @@ El motor está limitado deliberadamente para PCs modestos:
 - máximo 16 modelos abiertos por reconstrucción.
 
 La extensión vive en el repositorio y se instala desde AxiomCode Marketplace; no forma parte del Setup principal.
+
+## Arquitectura de extensión
+
+La extensión se instala desde `extensions/intellicode` mediante AxiomCode Marketplace. El editor no contiene lógica específica de IntelliCode: solo expone el cargador genérico `contributes.rendererRuntime`. El manifiesto declara `runtime.js` y el runtime registra sus sugerencias y comandos al activarse.
+
+El Setup de AxiomCode no incluye esta carpeta ni sus archivos.
