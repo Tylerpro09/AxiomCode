@@ -271,8 +271,45 @@ function toggleSidebar(force){sidebarVisible=force??!sidebarVisible;document.bod
 async function updateGit(){if(!workspace)return;const r=await window.axiom.gitStatus(workspace.root),first=(r.stdout||'').split(/\r?\n/)[0],branch=r.ok?(first.replace(/^##\s*/,'').split('...')[0]||'git'):'sin git';$('#gitStatus').innerHTML=`<span class="codicon codicon-source-control"></span>${escapeHtml(branch)}`;if(sideMode==='scm')renderSideView();}
 function fitActiveTerminal(){const t=terminalState.sessions.get(terminalState.active);if(!t?.fit||panelMode!=='terminal')return;requestAnimationFrame(()=>{try{t.fit.fit();window.axiom.resizeTerminal(t.id,t.term.cols,t.term.rows);}catch{}});}
 function togglePanel(force){const p=$('#panel'),open=force??!p.classList.contains('open');p.classList.toggle('open',open);if(open&&panelMode==='terminal')renderActiveTerminal();setTimeout(()=>{editor?.layout();fitActiveTerminal();},40);}
-function setPanelMode(mode){panelMode=mode;togglePanel(true);$$('.panel-title-strip>button').forEach(b=>b.classList.remove('active'));const ids={problems:'#problemsTab',output:'#outputTab',debug:'#debugTab',terminal:'#terminalTab'};$(ids[mode])?.classList.add('active');renderPanelContent();}
-function renderPanelContent(){const out=$('#terminalOutput'),host=$('#terminalHost'),row=$('.terminal-input-row'),actions=$('.terminal-actions');out.innerHTML='';host.style.display=panelMode==='terminal'?'block':'none';out.style.display=panelMode==='terminal'?'none':'block';row.style.display='none';actions.style.visibility=panelMode==='terminal'?'visible':'hidden';if(panelMode==='terminal'){renderActiveTerminal();return;}if(panelMode==='output'){out.textContent=outputLog.join('\n')||'AxiomCode Output';return;}if(panelMode==='debug'){out.textContent=debugLog.join('\n')||'Consola de depuración lista.';return;}const markers=monaco?.editor?.getModelMarkers({})||[];if(!markers.length){out.innerHTML='<div class="empty-panel">No se detectaron problemas.</div>';return;}for(const m of markers){const d=document.createElement('button');d.className='problem-row';d.innerHTML=`<span class="codicon codicon-${m.severity>=8?'error':'warning'}"></span><span>${escapeHtml(m.message)}</span><small>${escapeHtml(basename(m.resource.path))}:${m.startLineNumber}</small>`;d.onclick=()=>openFile(m.resource.fsPath,m.startLineNumber);out.appendChild(d);}}
+function setPanelMode(mode){panelMode=mode;togglePanel(true);$('.panel-title-strip>button').forEach(b=>b.classList.remove('active'));const ids={problems:'#problemsTab',output:'#outputTab',debug:'#debugTab',terminal:'#terminalTab'};$(ids[mode])?.classList.add('active');renderPanelContent();}
+function currentProblemMarkers(){
+  if(typeof monaco==='undefined')return [];
+  return (monaco.editor.getModelMarkers({})||[])
+    .filter(m=>m&&m.resource&&m.message)
+    .sort((a,b)=>(b.severity-a.severity)||String(a.resource?.fsPath||a.resource?.path||'').localeCompare(String(b.resource?.fsPath||b.resource?.path||''))||(a.startLineNumber-b.startLineNumber)||(a.startColumn-b.startColumn));
+}
+function updateProblemBadge(markers=currentProblemMarkers()){
+  const tab=$('#problemsTab');if(!tab)return;
+  const errors=markers.filter(m=>m.severity>=monaco.MarkerSeverity.Error).length;
+  const warnings=markers.filter(m=>m.severity===monaco.MarkerSeverity.Warning).length;
+  tab.textContent=markers.length?`PROBLEMAS (${markers.length})`:'PROBLEMAS';
+  tab.title=markers.length?`${errors} error(es), ${warnings} advertencia(s)`:'Sin problemas detectados';
+  tab.classList.toggle('has-errors',errors>0);
+  tab.classList.toggle('has-warnings',errors===0&&warnings>0);
+}
+function markerLocation(marker){
+  const resource=marker?.resource;
+  const filePath=resource?.fsPath||resource?.path||'';
+  return {filePath,label:basename(filePath||resource?.toString?.()||'archivo')};
+}
+function renderPanelContent(){
+  const out=$('#terminalOutput'),host=$('#terminalHost'),row=$('.terminal-input-row'),actions=$('.terminal-actions');
+  out.innerHTML='';host.style.display=panelMode==='terminal'?'block':'none';out.style.display=panelMode==='terminal'?'none':'block';row.style.display='none';actions.style.visibility=panelMode==='terminal'?'visible':'hidden';
+  if(panelMode==='terminal'){renderActiveTerminal();return;}
+  if(panelMode==='output'){out.textContent=outputLog.join('\n')||'AxiomCode Output';return;}
+  if(panelMode==='debug'){out.textContent=debugLog.join('\n')||'Consola de depuración lista.';return;}
+  const markers=currentProblemMarkers();updateProblemBadge(markers);
+  if(!markers.length){out.innerHTML='<div class="empty-panel">No se detectaron problemas en los archivos abiertos.</div>';return;}
+  for(const m of markers){
+    const {filePath,label}=markerLocation(m);
+    const icon=m.severity>=monaco.MarkerSeverity.Error?'error':m.severity===monaco.MarkerSeverity.Warning?'warning':'info';
+    const kind=m.severity>=monaco.MarkerSeverity.Error?'Error':m.severity===monaco.MarkerSeverity.Warning?'Advertencia':'Información';
+    const d=document.createElement('button');d.className='problem-row';
+    d.innerHTML=`<span class="codicon codicon-${icon}"></span><span><b>${escapeHtml(kind)}:</b> ${escapeHtml(m.message)}</span><small>${escapeHtml(label)}:${m.startLineNumber}:${m.startColumn}</small>`;
+    d.onclick=()=>filePath&&openFile(filePath,m.startLineNumber);
+    out.appendChild(d);
+  }
+}
 async function newTerminal(shell=$('#terminalShell')?.value||window.AxiomPreferences?.getSetting('terminal.defaultProfile')||'powershell'){const info=await window.axiom.createTerminal(shell,workspace?.root),session={...info,buffer:'',history:[],historyPos:0,term:null,fit:null,node:null};if(info.pty&&globalThis.Terminal&&globalThis.FitAddon?.FitAddon){const node=document.createElement('div');node.className='xterm-session';node.dataset.id=info.id;$('#terminalHost').appendChild(node);const term=new Terminal({cursorBlink:true,fontFamily:'Cascadia Code, Consolas, monospace',fontSize:Number(window.AxiomPreferences?.getSetting('terminal.fontSize'))||13,lineHeight:1.2,scrollback:Number(window.AxiomPreferences?.getSetting('terminal.scrollback'))||5000,theme:{background:'#181818',foreground:'#CCCCCC',cursor:'#AEAFAD',selectionBackground:'#264F78'}}),fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open(node);term.onData(data=>window.axiom.writeTerminal(info.id,data));session.term=term;session.fit=fit;session.node=node;}terminalState.sessions.set(info.id,session);terminalState.active=info.id;renderTerminalTabs();setPanelMode('terminal');fitActiveTerminal();}
 function renderTerminalTabs(){const host=$('#terminalTabs');host.innerHTML='';terminalState.sessions.forEach((t,id)=>{const b=document.createElement('button');b.className='terminal-tab'+(id===terminalState.active?' active':'');b.textContent=(t.shell==='cmd'?'CMD':'PowerShell')+' '+id.split('-').pop();b.onclick=()=>{terminalState.active=id;renderTerminalTabs();renderActiveTerminal();};host.appendChild(b);});}
 function renderActiveTerminal(){if(panelMode!=='terminal')return;const out=$('#terminalOutput'),host=$('#terminalHost'),row=$('.terminal-input-row'),t=terminalState.sessions.get(terminalState.active);host.style.display='block';for(const n of host.querySelectorAll('.xterm-session'))n.style.display=n.dataset.id===terminalState.active?'block':'none';if(t?.term){out.style.display='none';row.style.display='none';fitActiveTerminal();t.term.focus();}else{host.style.display=t?'none':'block';out.style.display='block';row.style.display=t?'flex':'none';out.textContent=t?.buffer||'No hay terminal activa. Pulsa + para crear una.';out.scrollTop=out.scrollHeight;if(t)$('#terminalPrompt').textContent=t.shell==='cmd'?'CMD>':'PS>';}}
@@ -378,14 +415,20 @@ async function setupSettings(){
 let externalChangeTimer;
 window.axiom.onWorkspaceFileChanged(change=>{if(!workspace||change.root!==workspace.root)return;clearTimeout(externalChangeTimer);externalChangeTimer=setTimeout(async()=>{try{workspace=await window.axiom.refreshWorkspace(workspace.root);if(sideMode==='explorer')renderSideView();const tab=tabs.get(change.path);if(tab&&!tab.dirty){const r=await window.axiom.readFile(change.path);if(r.content!==tab.model.getValue()){tab.model.setValue(r.content);tab.dirty=false;renderTabs();logOutput('Recargado por cambio externo: '+change.path);}}}catch{}},180);});
 const iconsReady=window.axiom.getIconManifest().then(m=>{iconManifest=m;}).catch(()=>setStatus('Tema de iconos no disponible'));
-require.config({paths:{vs:'../node_modules/monaco-editor/min/vs'}});
+const monacoVsUrl=new URL('../node_modules/monaco-editor/min/vs',location.href).href.replace(/\/$/,'');
+require.config({paths:{vs:monacoVsUrl}});
 require(['vs/editor/editor.main'],async()=>{
 await iconsReady;
 monaco.editor.defineTheme('axiom-vscode-dark',{base:'vs-dark',inherit:true,rules:[{token:'comment',foreground:'6A9955'},{token:'keyword',foreground:'C586C0'},{token:'string',foreground:'CE9178'},{token:'number',foreground:'B5CEA8'},{token:'type',foreground:'4EC9B0'}],colors:{'editor.background':'#1F1F1F','editor.foreground':'#CCCCCC','editorLineNumber.foreground':'#6E7681','editorLineNumber.activeForeground':'#CCCCCC','editorCursor.foreground':'#AEAFAD','editor.selectionBackground':'#264F78','editor.inactiveSelectionBackground':'#3A3D41','editorIndentGuide.background1':'#404040','editorIndentGuide.activeBackground1':'#707070','editorWidget.background':'#202020','editorWidget.border':'#454545','editorSuggestWidget.background':'#202020','editorSuggestWidget.border':'#454545','editorSuggestWidget.selectedBackground':'#04395E'}});
 editor=monaco.editor.create($('#editor'),{theme:'axiom-vscode-dark',automaticLayout:true,fontFamily:'Cascadia Code, Consolas, monospace',fontLigatures:true,fontSize:14,lineHeight:21,minimap:{enabled:true,scale:1},smoothScrolling:true,cursorSmoothCaretAnimation:'on',bracketPairColorization:{enabled:true},guides:{bracketPairs:true,indentation:true},wordWrap:'off',renderWhitespace:'selection',padding:{top:5,bottom:5},scrollBeyondLastLine:false,stickyScroll:{enabled:true},formatOnPaste:false,formatOnType:false});
 editor.onDidChangeModelContent(()=>{if(!activePath)return;const t=tabs.get(activePath);if(t&&!t.dirty){t.dirty=true;renderTabs();}clearTimeout(autoSaveTimer);if(window.AxiomPreferences?.getSetting('files.autoSave')==='afterDelay'){const delay=Math.max(100,Number(window.AxiomPreferences.getSetting('files.autoSaveDelay'))||1000);autoSaveTimer=setTimeout(()=>{if(activePath&&tabs.get(activePath)?.dirty)saveActive();},delay);}});
 editor.onDidChangeCursorPosition(e=>{$('#cursorPos').textContent=`Ln ${e.position.lineNumber}, Col ${e.position.column}`;});
-editor.onDidChangeModel(()=>{if(panelMode==='problems')renderPanelContent();});
+try{
+  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({noSyntaxValidation:false,noSemanticValidation:false,noSuggestionDiagnostics:false});
+  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({noSyntaxValidation:false,noSemanticValidation:false,noSuggestionDiagnostics:false});
+}catch(e){logOutput('Diagnósticos JS/TS: '+e.message);}
+monaco.editor.onDidChangeMarkers(()=>{updateProblemBadge();if(panelMode==='problems')renderPanelContent();});
+editor.onDidChangeModel(()=>{updateProblemBadge();if(panelMode==='problems')renderPanelContent();});
 editor.addAction({id:'axiom.save',label:'Guardar archivo',keybindings:[monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS],run:saveActive});
 wireUI();setupShortcuts();await setupSettings();await refreshExtensionState();renderSideView();renderTabs();showCode(false);const restored=await window.axiom.restoreWorkspace();if(restored)useWorkspace(restored,true);else setStatus('AxiomCode listo');logOutput('Workbench iniciado');renderUpdateButton();if(window.AxiomPreferences?.getSetting('update.autoCheck')!==false){setTimeout(()=>checkForAppUpdates(false),1500);setInterval(()=>checkForAppUpdates(false),4*60*60*1000);}
 window.axiom.rendererReady({monaco:true,materialIcons:Object.keys(iconManifest?.iconDefinitions||{}).length,ui:'vscode-dark-modern',views:['explorer','search','scm','run','extensions'],menus:true});
