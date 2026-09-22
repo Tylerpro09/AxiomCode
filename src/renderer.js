@@ -332,9 +332,9 @@ async function deletePath(p){if(!confirm(`¿Eliminar ${basename(p)}?`))return;aw
 function showContextMenu(x,y,p){document.querySelector('.context-menu')?.remove();const m=document.createElement('div');m.className='context-menu';m.innerHTML='<button data-a="open">Abrir</button><button data-a="rename">Cambiar nombre</button><button data-a="copy">Copiar ruta</button><button data-a="copyrel">Copiar ruta relativa</button><button data-a="reveal">Mostrar en Explorador</button><div></div><button data-a="delete" class="danger">Eliminar</button>';m.style.left=x+'px';m.style.top=y+'px';m.onclick=async e=>{const a=e.target.dataset.a;if(a==='open')await openFile(p);if(a==='rename')await renamePath(p);if(a==='copy')await window.axiom.clipboardWrite(p);if(a==='copyrel')await window.axiom.clipboardWrite(relativeToWorkspace(p));if(a==='reveal')window.axiom.reveal(p);if(a==='delete')await deletePath(p);m.remove();};document.body.appendChild(m);setTimeout(()=>document.addEventListener('click',()=>m.remove(),{once:true}),0);}
 function renderExplorer(host){if(!workspace){host.innerHTML='<div class="empty-state">Todavía no has abierto una carpeta.<button id="welcomeOpenSide">Abrir carpeta</button></div>';$('#welcomeOpenSide').onclick=openWorkspace;return;}const draw=(nodes,depth)=>nodes.forEach(n=>{const open=n.type==='dir'&&n._open!==false,id=n.type==='dir'?folderIconId(n.name,open):fileIconId(n.name),row=document.createElement('div');row.className='tree-row'+(n.path===activePath?' selected':'');row.style.paddingLeft=(5+depth*13)+'px';row.innerHTML=`<span class="chev">${n.type==='dir'?`<span class="codicon codicon-chevron-${open?'down':'right'}"></span>`:''}</span><span class="icon-wrap">${iconHtml(id)}</span><span>${escapeHtml(n.name)}</span>`;row.onclick=()=>{if(n.type==='dir'){n._open=n._open===false;renderSideView();}else openFile(n.path);};row.oncontextmenu=e=>{e.preventDefault();showContextMenu(e.clientX,e.clientY,n.path);};host.appendChild(row);if(open)draw(n.children||[],depth+1);});draw(workspace.tree,0);}
 function renderSearch(host){
-  host.innerHTML='<div class="side-search"><div class="side-input"><span class="codicon codicon-search"></span><input id="sideSearchInput" placeholder="Buscar"><button id="searchCaseBtn" class="search-option" title="Coincidir mayúsculas/minúsculas">Aa</button></div><div class="side-input replace-input"><span class="codicon codicon-replace"></span><input id="sideReplaceInput" placeholder="Reemplazar"><button id="replaceAllBtn" title="Reemplazar todo"><span class="codicon codicon-replace-all"></span></button></div><div id="sideSearchMeta" class="search-meta"></div><div id="sideSearchResults" class="side-results"></div></div>';
-  const input=$('#sideSearchInput'),replace=$('#sideReplaceInput'),results=$('#sideSearchResults'),meta=$('#sideSearchMeta'),caseBtn=$('#searchCaseBtn');
-  let timer,matchCase=false,lastRows=[];
+  host.innerHTML='<div class="side-search"><div class="side-input"><span class="codicon codicon-search"></span><input id="sideSearchInput" placeholder="Buscar"><button id="searchCaseBtn" class="search-option" title="Coincidir mayúsculas/minúsculas">Aa</button><button id="searchWordBtn" class="search-option" title="Solo palabra completa">Ab</button><button id="searchRegexBtn" class="search-option" title="Usar expresión regular">.*</button></div><div class="side-input replace-input"><span class="codicon codicon-replace"></span><input id="sideReplaceInput" placeholder="Reemplazar"><button id="replaceAllBtn" title="Reemplazar todo"><span class="codicon codicon-replace-all"></span></button></div><div id="sideSearchMeta" class="search-meta"></div><div id="sideSearchResults" class="side-results"></div></div>';
+  const input=$('#sideSearchInput'),replace=$('#sideReplaceInput'),results=$('#sideSearchResults'),meta=$('#sideSearchMeta'),caseBtn=$('#searchCaseBtn'),wordBtn=$('#searchWordBtn'),regexBtn=$('#searchRegexBtn');
+  let timer,matchCase=false,wholeWord=false,regex=false,lastRows=[];
   const drawRows=rows=>{
     lastRows=rows;results.innerHTML='';meta.textContent=rows.length?rows.length+' resultado(s)':'';
     if(!rows.length&&input.value.trim())results.innerHTML='<div class="view-note">Sin resultados</div>';
@@ -348,11 +348,13 @@ function renderSearch(host){
   const run=()=>{clearTimeout(timer);timer=setTimeout(async()=>{
     const q=input.value;if(!q||!workspace){drawRows([]);return;}
     results.innerHTML='<div class="view-note">Buscando...</div>';meta.textContent='';
-    try{drawRows(await window.axiom.searchWorkspace(workspace.root,q,{matchCase}));}
-    catch(e){results.innerHTML='<div class="view-note">'+escapeHtml(e.message)+'</div>';}
+    try{drawRows(await window.axiom.searchWorkspace(workspace.root,q,{matchCase,wholeWord,regex}));}
+    catch(e){meta.textContent='';results.innerHTML='<div class="view-note">'+escapeHtml(e.message)+'</div>';}
   },180);};
   input.oninput=run;
   caseBtn.onclick=()=>{matchCase=!matchCase;caseBtn.classList.toggle('active',matchCase);run();};
+  wordBtn.onclick=()=>{wholeWord=!wholeWord;wordBtn.classList.toggle('active',wholeWord);run();};
+  regexBtn.onclick=()=>{regex=!regex;regexBtn.classList.toggle('active',regex);run();};
   $('#replaceAllBtn').onclick=async()=>{
     const q=input.value;if(!workspace||!q)return;
     const value=replace.value;
@@ -360,7 +362,7 @@ function renderSearch(host){
     if(!count)return setStatus('No hay coincidencias para reemplazar');
     if(!confirm(`¿Reemplazar todas las coincidencias de "${q}" en el proyecto?`))return;
     try{
-      const result=await window.axiom.replaceWorkspace(workspace.root,q,value,{matchCase});
+      const result=await window.axiom.replaceWorkspace(workspace.root,q,value,{matchCase,wholeWord,regex});
       setStatus(`Reemplazadas ${result.replacements} coincidencias en ${result.filesChanged} archivo(s)`);
       logOutput(`Buscar/Reemplazar: ${result.replacements} reemplazos en ${result.filesChanged} archivos`);
       for(const [p,t] of tabs){
