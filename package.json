@@ -21,7 +21,8 @@
     "test:runner:smoke": "electron scripts/smoke-runner.cjs",
     "test:dist:no-bundled-extensions": "node scripts/verify-no-bundled-extensions.cjs",
     "test:manage": "electron scripts/smoke-manage-center.cjs",
-    "test:intellicode": "node --test scripts/test-intellicode.cjs"
+    "test:intellicode": "node --test scripts/test-intellicode.cjs",
+    "test:extension-runtime:smoke": "electron scripts/smoke-generic-extension-runtime.cjs"
   },
   "author": "AxiomCode",
   "license": "MIT",
