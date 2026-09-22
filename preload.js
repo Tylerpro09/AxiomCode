@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('axiom', {
   writeFile: (p, content) => ipcRenderer.invoke('file:write', p, content),
   createFile: (p, isDir = false) => ipcRenderer.invoke('file:create', p, isDir),
   renameFile: (from, to) => ipcRenderer.invoke('file:rename', from, to),
+  copyFile: (from, to) => ipcRenderer.invoke('file:copy', from, to),
   deleteFile: p => ipcRenderer.invoke('file:delete', p),
   runTerminal: (command, cwd) => ipcRenderer.invoke('terminal:run', command, cwd),
   createTerminal: (shell, cwd) => ipcRenderer.invoke('terminal:create', {shell,cwd}),
