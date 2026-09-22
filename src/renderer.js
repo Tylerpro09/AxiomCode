@@ -320,6 +320,19 @@ function reorderTab(source,target){
   entries.splice(to,0,item);
   rebuildTabOrder(entries);renderTabs();
 }
+function closeOtherTabs(p=activePath){
+  if(!p)return;
+  for(const key of [...tabs.keys()])if(key!==p&&!tabs.get(key)?.pinned)closeTab(key);
+}
+function closeTabsRight(p=activePath){
+  if(!p)return;
+  const keys=[...tabs.keys()],index=keys.indexOf(p);
+  if(index<0)return;
+  for(const key of keys.slice(index+1))if(!tabs.get(key)?.pinned)closeTab(key);
+}
+function closeUnpinnedTabs(){
+  for(const key of [...tabs.keys()])if(!tabs.get(key)?.pinned)closeTab(key);
+}
 function showTabContextMenu(x,y,p){
   document.querySelector('.context-menu')?.remove();
   const keys=[...tabs.keys()],index=keys.indexOf(p);
@@ -331,9 +344,9 @@ function showTabContextMenu(x,y,p){
     const a=e.target.dataset.a;if(!a)return;
     if(a==='pin')togglePinTab(p);
     if(a==='close')closeTab(p);
-    if(a==='others')for(const key of [...tabs.keys()])if(key!==p&&!tabs.get(key)?.pinned)closeTab(key);
-    if(a==='right')for(const key of keys.slice(index+1))if(!tabs.get(key)?.pinned)closeTab(key);
-    if(a==='all')for(const key of [...tabs.keys()])if(!tabs.get(key)?.pinned)closeTab(key);
+    if(a==='others')closeOtherTabs(p);
+    if(a==='right')closeTabsRight(p);
+    if(a==='all')closeUnpinnedTabs();
     if(a==='copy')await window.axiom.clipboardWrite(p);
     if(a==='copyrel')await window.axiom.clipboardWrite(relativeToWorkspace(p));
     if(a==='reveal')window.axiom.reveal(p);
@@ -1006,6 +1019,7 @@ async function runActiveFile(){
 }
 const commands=[
 {name:'Archivo: Nuevo archivo',hint:'',run:createNewFile},{name:'Archivo: Abrir archivo...',hint:'Ctrl+O',run:openFiles},{name:'Archivo: Abrir carpeta...',hint:'Ctrl+K Ctrl+O',run:openWorkspace},{name:'Archivo: Guardar',hint:'Ctrl+S',run:saveActive},{name:'Archivo: Guardar todo',hint:'Ctrl+Shift+S',run:saveAll},{name:'Archivo: Cerrar editor',hint:'Ctrl+W',run:()=>activePath&&closeTab(activePath)},
+{name:'Editor: Fijar/desfijar pestaña',hint:'',run:()=>activePath&&togglePinTab(activePath)},{name:'Editor: Cerrar otros editores',hint:'',run:()=>closeOtherTabs()},{name:'Editor: Cerrar editores a la derecha',hint:'',run:()=>closeTabsRight()},{name:'Editor: Cerrar editores no fijados',hint:'',run:closeUnpinnedTabs},
 {name:'Scratch: Abrir editor de bloques',hint:'',run:()=>openScratchMode()},{name:'Ver: Explorador',hint:'Ctrl+Shift+E',run:()=>setSideMode('explorer')},{name:'Ver: Buscar',hint:'Ctrl+Shift+F',run:()=>setSideMode('search')},{name:'Ver: Control de código fuente',hint:'Ctrl+Shift+G',run:()=>setSideMode('scm')},{name:'Ver: Esquema (Outline)',hint:'',run:()=>setSideMode('outline')},{name:'Ver: Extensiones',hint:'Ctrl+Shift+X',run:()=>setSideMode('extensions')},{name:'Ver: Alternar barra lateral',hint:'Ctrl+B',run:()=>toggleSidebar()},{name:'Ver: Alternar panel',hint:'Ctrl+J',run:()=>togglePanel()},
 {name:'Ejecutar: Archivo activo',hint:'F5',run:runActiveFile},{name:'Runner: Abrir',hint:'',run:openRunnerMode},{name:'Runner: Detener ejecución',hint:'',run:stopRunner},{name:'Terminal: Nueva PowerShell',hint:'',run:()=>newTerminal('powershell')},{name:'Terminal: Nueva CMD',hint:'',run:()=>newTerminal('cmd')},{name:'Terminal: Cerrar activa',hint:'',run:closeActiveTerminal},{name:'Git: Actualizar estado',hint:'',run:updateGit},{name:'Archivo: Revelar en Explorador',hint:'',run:()=>activePath&&window.axiom.reveal(activePath)},
 {name:'Editor: Formatear documento',hint:'Shift+Alt+F',run:()=>runEditorAction('editor.action.formatDocument')},{name:'Editor: Formatear selección',hint:'',run:()=>runEditorAction('editor.action.formatSelection')},{name:'Editor: Ir a línea',hint:'Ctrl+G',run:()=>runEditorAction('editor.action.gotoLine')},{name:'Editor: Ir a definición',hint:'F12',run:goToDefinition},{name:'Editor: Ver definición',hint:'Alt+F12',run:peekDefinition},{name:'Editor: Ir a referencias',hint:'Shift+F12',run:showReferences},{name:'Editor: Cambiar nombre de símbolo',hint:'F2',run:()=>runEditorAction('editor.action.rename')},{name:'Editor: Acción rápida',hint:'Ctrl+.',run:()=>runEditorAction('editor.action.quickFix')},{name:'Editor: Mostrar sugerencias',hint:'Ctrl+Espacio',run:()=>runEditorAction('editor.action.triggerSuggest')},{name:'Editor: Ir a símbolo...',hint:'Ctrl+Shift+O',run:()=>runEditorAction('editor.action.quickOutline')},{name:'Editor: Siguiente problema',hint:'F8',run:()=>runEditorAction('editor.action.marker.next')},{name:'Editor: Problema anterior',hint:'Shift+F8',run:()=>runEditorAction('editor.action.marker.prev')},{name:'Editor: Buscar',hint:'Ctrl+F',run:()=>runEditorAction('actions.find')},{name:'Editor: Reemplazar',hint:'Ctrl+H',run:()=>runEditorAction('editor.action.startFindReplaceAction')},{name:'Proyecto: Buscar y reemplazar',hint:'Ctrl+Shift+H',run:()=>{setSideMode('search');setTimeout(()=>$('#sideReplaceInput')?.focus(),30);}},{name:'Archivo: Abrir reciente...',hint:'Ctrl+R',run:showRecentWorkspaces},{name:'Preferencias: Settings',hint:'Ctrl+,',run:()=>window.AxiomPreferences?.open('settings')},{name:'Preferencias: Keyboard Shortcuts',hint:'Ctrl+K Ctrl+S',run:()=>window.AxiomPreferences?.open('keybindings')},{name:'Preferencias: Profiles',hint:'',run:()=>window.AxiomPreferences?.open('profiles')},{name:'Preferencias: Backup and Sync Settings',hint:'',run:()=>window.AxiomPreferences?.open('backup')},{name:'Ayuda: Buscar actualizaciones',hint:'',run:()=>checkForAppUpdates(true)}
