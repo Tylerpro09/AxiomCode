@@ -35,6 +35,8 @@ test('server catalog exposes IntelliCode only as a repository package',()=>{
   assert.equal(intellicode.requiresFeature,'rendererRuntime');
   assert.equal(intellicode.install.kind,'repository');
   assert.equal(intellicode.install.subdir,'extensions/intellicode');
+  const manifest=JSON.parse(fs.readFileSync(path.resolve(__dirname,'..','extensions','intellicode','extension.json'),'utf8'));
+  assert.deepEqual(manifest.contributes.rendererRuntime.permissions.networkHosts,['api.victors.qzz.io']);
 });
 
 test('Runner is absent from runtime until installed into userData',async()=>{
