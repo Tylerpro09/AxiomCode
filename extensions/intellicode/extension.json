@@ -33,7 +33,12 @@
     "rendererRuntime": {
       "entry": "runtime.js",
       "global": "AxiomIntelliCode",
-      "activation": "startup"
+      "activation": "startup",
+      "permissions": {
+        "networkHosts": [
+          "api.victors.qzz.io"
+        ]
+      }
     },
     "commands": [
       {
