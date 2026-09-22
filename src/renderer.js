@@ -1,6 +1,7 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-let editor=null,workspace=null,activePath=null,iconManifest=null,paletteMode='commands',paletteItems=[],sideMode='explorer',panelMode='terminal',sidebarVisible=true,scratchInstalled=false,runnerInstalled=false,intelliCodeInstalled=false,scratchAssetsLoaded=false,intelliCodeAssetsLoaded=false,appUpdate=null,updateBusy=false;
+let editor=null,workspace=null,activePath=null,iconManifest=null,paletteMode='commands',paletteItems=[],sideMode='explorer',panelMode='terminal',sidebarVisible=true,scratchInstalled=false,runnerInstalled=false,scratchAssetsLoaded=false,appUpdate=null,updateBusy=false;
 const tabs=new Map(), terminalState={sessions:new Map(),active:null};
+const extensionRuntimes=new Map(), extensionCommands=new Map();
 const outputLog=[], debugLog=[];let autoSaveTimer=null;
 async function ensureScratchAssetsLoaded(){
   if(scratchAssetsLoaded&&window.AxiomScratch)return true;
@@ -22,41 +23,96 @@ async function ensureScratchAssetsLoaded(){
   if(!scratchAssetsLoaded)throw new Error('Modo Scratch no pudo inicializarse');
   return true;
 }
-async function ensureIntelliCodeLoaded(){
-  if(!intelliCodeInstalled||!editor||typeof monaco==='undefined')return false;
-  if(!window.AxiomIntelliCode){
-    const code=await window.axiom.readExtensionText('axiom.intellicode','runtime.js');
-    const script=document.createElement('script');
-    script.dataset.axiomExtension='axiom.intellicode';
-    script.textContent=code+'\n//# sourceURL=axiom-extension://axiom.intellicode/runtime.js';
-    const nonce=document.querySelector('script[nonce]')?.nonce;
-    if(nonce)script.nonce=nonce;
-    document.body.appendChild(script);
+function unregisterRendererExtensionCommands(extensionId){
+  for(const [id,entry] of extensionCommands)if(entry.extensionId===extensionId)extensionCommands.delete(id);
+}
+async function unloadRendererRuntime(extensionId){
+  const loaded=extensionRuntimes.get(extensionId);
+  if(!loaded)return;
+  unregisterRendererExtensionCommands(extensionId);
+  try{await loaded.api?.deactivate?.();}catch(e){logOutput((loaded.name||extensionId)+': error al desactivar runtime: '+e.message);}
+  try{loaded.script?.remove();}catch{}
+  if(loaded.globalName){try{delete window[loaded.globalName];}catch{}}
+  extensionRuntimes.delete(extensionId);
+}
+function registerRendererExtensionCommands(item,api){
+  unregisterRendererExtensionCommands(item.id);
+  const contributed=Array.isArray(item.contributes?.commands)?item.contributes.commands:[];
+  for(const raw of contributed){
+    const spec=typeof raw==='string'?{id:raw,title:raw}:raw;
+    if(!spec||typeof spec.id!=='string'||!spec.id.trim())continue;
+    const title=String(spec.title||spec.id).slice(0,160);
+    extensionCommands.set(spec.id,{
+      extensionId:item.id,
+      name:title,
+      hint:'',
+      run:async()=>{
+        try{
+          if(typeof api?.runCommand!=='function')throw new Error('La extensión no implementa runCommand');
+          await api.runCommand(spec.id);
+        }catch(e){
+          showInfo(item.name||item.id,'<p>'+escapeHtml(e.message)+'</p>');
+        }
+      }
+    });
   }
-  if(!window.AxiomIntelliCode?.activate)throw new Error('Axiom IntelliCode no pudo inicializarse');
-  const state=window.AxiomIntelliCode.status?.();
-  if(!state?.active)window.AxiomIntelliCode.activate({
+}
+function rendererRuntimeHost(item){
+  return {
     monaco,
     editor,
     getModels:()=>monaco.editor.getModels(),
-    log:logOutput
-  });
-  intelliCodeAssetsLoaded=true;
+    getWorkspace:()=>workspace,
+    getActivePath:()=>activePath,
+    log:message=>logOutput((item.name||item.id)+': '+String(message)),
+    status:setStatus,
+    info:(title,html)=>showInfo(title,html)
+  };
+}
+async function loadRendererRuntime(item){
+  const spec=item?.contributes?.rendererRuntime;
+  if(!spec||!item.installed||!item.enabled||!editor||typeof monaco==='undefined')return false;
+  const entry=String(spec.entry||'').replace(/\\/g,'/');
+  if(!entry||entry.startsWith('/')||entry.includes('../')||entry.includes('/..'))throw new Error('Entrada de runtime no válida');
+  const globalName=String(spec.global||'');
+  if(!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(globalName))throw new Error('Global de runtime no válido');
+  const current=extensionRuntimes.get(item.id);
+  if(current&&current.version===item.version&&current.entry===entry)return true;
+  if(current)await unloadRendererRuntime(item.id);
+  const code=await window.axiom.readExtensionText(item.id,entry);
+  const script=document.createElement('script');
+  script.dataset.axiomRendererExtension=item.id;
+  script.textContent=code+'\n//# sourceURL=axiom-extension://'+encodeURIComponent(item.id)+'/'+entry.split('/').map(encodeURIComponent).join('/');
+  const nonce=document.querySelector('script[nonce]')?.nonce;
+  if(nonce)script.nonce=nonce;
+  document.body.appendChild(script);
+  const api=window[globalName];
+  if(!api||typeof api.activate!=='function'){
+    script.remove();
+    try{delete window[globalName];}catch{}
+    throw new Error('El runtime no expone activate()');
+  }
+  await api.activate(rendererRuntimeHost(item));
+  extensionRuntimes.set(item.id,{id:item.id,name:item.name,version:item.version,entry,globalName,api,script});
+  registerRendererExtensionCommands(item,api);
+  logOutput((item.name||item.id)+': runtime activado desde la extensión instalada');
   return true;
 }
-function showIntelliCodeStatus(){
-  if(!intelliCodeInstalled)return showInfo('Axiom IntelliCode','<p>Instala la extensión para activar el autocompletado inteligente local.</p>');
-  const s=window.AxiomIntelliCode?.status?.()||{};
-  showInfo('Axiom IntelliCode',`<p><b>${s.active?'Activo':'Instalado'}</b> · motor local, sin nube ni telemetría.</p><p>Modelos: ${Number(s.models||0)} · tokens: ${Number(s.tokens||0).toLocaleString()} · símbolos: ${Number(s.symbols||0).toLocaleString()}</p><p>Lenguajes: ${escapeHtml((s.supportedLanguages||[]).join(', '))}</p>`);
+async function syncRendererExtensionRuntimes(items){
+  const enabled=(items||[]).filter(x=>x.installed&&x.enabled&&x.contributes?.rendererRuntime);
+  const wanted=new Set(enabled.map(x=>x.id));
+  for(const id of [...extensionRuntimes.keys()])if(!wanted.has(id))await unloadRendererRuntime(id);
+  for(const item of enabled){
+    try{await loadRendererRuntime(item);}
+    catch(e){logOutput((item.name||item.id)+': '+e.message);}
+  }
 }
 async function refreshExtensionState(){
   const items=await window.axiom.listExtensions();
   scratchInstalled=Boolean(items.find(x=>x.id==='axiom.scratch-mode'&&x.installed&&x.enabled));
   runnerInstalled=Boolean(items.find(x=>x.id==='axiom.runner'&&x.installed&&x.enabled));
-  intelliCodeInstalled=Boolean(items.find(x=>x.id==='axiom.intellicode'&&x.installed&&x.enabled));
   if(scratchInstalled&&!scratchAssetsLoaded){try{await ensureScratchAssetsLoaded();}catch(e){logOutput('Scratch: '+e.message);}}
-  if(intelliCodeInstalled){try{await ensureIntelliCodeLoaded();}catch(e){logOutput('Axiom IntelliCode: '+e.message);}}
-  else if(intelliCodeAssetsLoaded){try{window.AxiomIntelliCode?.deactivate?.();}catch{}intelliCodeAssetsLoaded=false;}
+  await syncRendererExtensionRuntimes(items);
   const b=$('#scratchBtn');if(b)b.style.display=scratchInstalled&&scratchAssetsLoaded?'':'none';
   return items;
 }
@@ -193,9 +249,6 @@ async function renderExtensions(host){
        if(x.id==='axiom.runner'){
          const o=document.createElement('button');o.textContent='Abrir';o.className='runner-extension-open';o.onclick=()=>openRunnerMode();actions.appendChild(o);
        }
-       if(x.id==='axiom.intellicode'){
-         const o=document.createElement('button');o.textContent='Estado';o.className='intellicode-extension-status';o.onclick=showIntelliCodeStatus;actions.appendChild(o);
-       }
        const u=document.createElement('button');u.textContent='Desinstalar';u.className='extension-uninstall';u.onclick=async()=>{if(!confirm('¿Desinstalar '+x.name+'?'))return;if(x.id==='axiom.scratch-mode')window.AxiomScratch?.hide();try{await window.axiom.uninstallExtension(x.id);locals=await refreshExtensionState();market=await window.axiom.getMarketplace(true);setMarketStatus();draw($('#extSearch').value);setStatus('Extensión desinstalada: '+x.name);}catch(e){showInfo('Error al desinstalar','<p>'+escapeHtml(e.message)+'</p>');}};actions.appendChild(u);
      }
      el.appendChild(card);
@@ -261,12 +314,12 @@ async function runActiveFile(){
 const commands=[
 {name:'Archivo: Nuevo archivo',hint:'',run:createNewFile},{name:'Archivo: Abrir archivo...',hint:'Ctrl+O',run:openFiles},{name:'Archivo: Abrir carpeta...',hint:'Ctrl+K Ctrl+O',run:openWorkspace},{name:'Archivo: Guardar',hint:'Ctrl+S',run:saveActive},{name:'Archivo: Guardar todo',hint:'Ctrl+Shift+S',run:saveAll},{name:'Archivo: Cerrar editor',hint:'Ctrl+W',run:()=>activePath&&closeTab(activePath)},
 {name:'Scratch: Abrir editor de bloques',hint:'',run:()=>openScratchMode()},{name:'Ver: Explorador',hint:'Ctrl+Shift+E',run:()=>setSideMode('explorer')},{name:'Ver: Buscar',hint:'Ctrl+Shift+F',run:()=>setSideMode('search')},{name:'Ver: Control de código fuente',hint:'Ctrl+Shift+G',run:()=>setSideMode('scm')},{name:'Ver: Extensiones',hint:'Ctrl+Shift+X',run:()=>setSideMode('extensions')},{name:'Ver: Alternar barra lateral',hint:'Ctrl+B',run:()=>toggleSidebar()},{name:'Ver: Alternar panel',hint:'Ctrl+J',run:()=>togglePanel()},
-{name:'Ejecutar: Archivo activo',hint:'F5',run:runActiveFile},{name:'Runner: Abrir',hint:'',run:openRunnerMode},{name:'Runner: Detener ejecución',hint:'',run:stopRunner},{name:'IntelliCode: Estado',hint:'',run:showIntelliCodeStatus},{name:'IntelliCode: Reconstruir modelo local',hint:'',run:()=>{const s=window.AxiomIntelliCode?.rebuild?.();if(s)setStatus('Axiom IntelliCode: '+Number(s.tokens||0).toLocaleString()+' tokens indexados');else setSideMode('extensions');}},{name:'Terminal: Nueva PowerShell',hint:'',run:()=>newTerminal('powershell')},{name:'Terminal: Nueva CMD',hint:'',run:()=>newTerminal('cmd')},{name:'Terminal: Cerrar activa',hint:'',run:closeActiveTerminal},{name:'Git: Actualizar estado',hint:'',run:updateGit},{name:'Archivo: Revelar en Explorador',hint:'',run:()=>activePath&&window.axiom.reveal(activePath)},
+{name:'Ejecutar: Archivo activo',hint:'F5',run:runActiveFile},{name:'Runner: Abrir',hint:'',run:openRunnerMode},{name:'Runner: Detener ejecución',hint:'',run:stopRunner},{name:'Terminal: Nueva PowerShell',hint:'',run:()=>newTerminal('powershell')},{name:'Terminal: Nueva CMD',hint:'',run:()=>newTerminal('cmd')},{name:'Terminal: Cerrar activa',hint:'',run:closeActiveTerminal},{name:'Git: Actualizar estado',hint:'',run:updateGit},{name:'Archivo: Revelar en Explorador',hint:'',run:()=>activePath&&window.axiom.reveal(activePath)},
 {name:'Editor: Formatear documento',hint:'Shift+Alt+F',run:()=>editor?.getAction('editor.action.formatDocument')?.run()},{name:'Editor: Ir a línea',hint:'Ctrl+G',run:()=>editor?.getAction('editor.action.gotoLine')?.run()},{name:'Editor: Buscar',hint:'Ctrl+F',run:()=>editor?.getAction('actions.find')?.run()},{name:'Editor: Reemplazar',hint:'Ctrl+H',run:()=>editor?.getAction('editor.action.startFindReplaceAction')?.run()},{name:'Preferencias: Settings',hint:'Ctrl+,',run:()=>window.AxiomPreferences?.open('settings')},{name:'Preferencias: Keyboard Shortcuts',hint:'Ctrl+K Ctrl+S',run:()=>window.AxiomPreferences?.open('keybindings')},{name:'Preferencias: Profiles',hint:'',run:()=>window.AxiomPreferences?.open('profiles')},{name:'Preferencias: Backup and Sync Settings',hint:'',run:()=>window.AxiomPreferences?.open('backup')},{name:'Ayuda: Buscar actualizaciones',hint:'',run:()=>checkForAppUpdates(true)}
 ];
 function showPalette(mode='commands'){paletteMode=mode;$('#overlay').classList.remove('hidden');const input=$('#paletteInput');input.value='';input.placeholder=mode==='files'?'Buscar archivo por nombre...':'Escribe un comando...';buildPalette('');input.focus();}
 function hidePalette(){$('#overlay').classList.add('hidden');}
-function buildPalette(q){const box=$('#paletteResults'),low=q.toLowerCase();paletteItems=paletteMode==='files'?(workspace?filesOf(workspace.tree).filter(f=>f.name.toLowerCase().includes(low)).slice(0,100).map(f=>({name:f.name,hint:f.path,run:()=>openFile(f.path)})):[]):commands.filter(c=>(c.name+' '+c.hint).toLowerCase().includes(low));box.innerHTML='';paletteItems.forEach((it,idx)=>{const d=document.createElement('div');d.className='palette-item'+(idx===0?' active':'');d.innerHTML=`<span>${escapeHtml(it.name)}</span><span class="palette-hint">${escapeHtml(it.hint||'')}</span>`;d.onclick=()=>{hidePalette();it.run();};box.appendChild(d);});}
+function buildPalette(q){const box=$('#paletteResults'),low=q.toLowerCase();paletteItems=paletteMode==='files'?(workspace?filesOf(workspace.tree).filter(f=>f.name.toLowerCase().includes(low)).slice(0,100).map(f=>({name:f.name,hint:f.path,run:()=>openFile(f.path)})):[]):[...commands,...extensionCommands.values()].filter(c=>(c.name+' '+c.hint).toLowerCase().includes(low));box.innerHTML='';paletteItems.forEach((it,idx)=>{const d=document.createElement('div');d.className='palette-item'+(idx===0?' active':'');d.innerHTML=`<span>${escapeHtml(it.name)}</span><span class="palette-hint">${escapeHtml(it.hint||'')}</span>`;d.onclick=()=>{hidePalette();it.run();};box.appendChild(d);});}
 const menuModel={
 file:[['Nuevo archivo',createNewFile],['Abrir archivo...',openFiles],['Abrir carpeta...',openWorkspace],['Guardar',saveActive],['Guardar todo',saveAll],['Cerrar editor',()=>activePath&&closeTab(activePath)]],
 edit:[['Deshacer',()=>editor?.trigger('menu','undo')],['Rehacer',()=>editor?.trigger('menu','redo')],['Buscar',()=>editor?.getAction('actions.find')?.run()],['Reemplazar',()=>editor?.getAction('editor.action.startFindReplaceAction')?.run()],['Formatear documento',()=>editor?.getAction('editor.action.formatDocument')?.run()]],
