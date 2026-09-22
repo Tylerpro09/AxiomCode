@@ -433,6 +433,14 @@ ipcMain.handle('workspace:open', async () => { const r = await dialog.showOpenDi
 ipcMain.handle('workspace:refresh', async (_, root) => ({ root, tree: await tree(root) }));
 ipcMain.handle('workspace:restore', async()=>{const root=await backend.workspace.restoreLast();if(!root)return null;backend.watcher.watch(root);return{root,tree:await tree(root)};});
 ipcMain.handle('workspace:recent', ()=>backend.workspace.recent());
+ipcMain.handle('workspace:openPath', async (_, requestedRoot) => {
+  const root=path.resolve(String(requestedRoot||''));
+  const st=await fsp.stat(root);
+  if(!st.isDirectory())throw new Error('La ruta no es una carpeta');
+  await backend.workspace.remember(root);
+  backend.watcher.watch(root);
+  return {root,tree:await tree(root)};
+});
 ipcMain.handle('file:openDialog', async (_, root) => { const r=await dialog.showOpenDialog(mainWindow,{defaultPath:root||app.getPath('home'),properties:['openFile','multiSelections']}); if(r.canceled)return []; return r.filePaths; });
 ipcMain.handle('file:read', async (_, p) => ({ path: p, content: await fsp.readFile(p, 'utf8') }));
 ipcMain.handle('file:write', async (_, p, content) => { await fsp.writeFile(p, content, 'utf8'); return true; });
@@ -445,6 +453,7 @@ ipcMain.handle('git:changes', async (_,cwd)=>run('git status --porcelain',cwd));
 ipcMain.handle('git:addAll', async (_,cwd)=>run('git add -A',cwd));
 ipcMain.handle('git:commit', async (_,cwd,message)=>run('git commit -m '+JSON.stringify(String(message||'')),cwd));
 ipcMain.handle('system:reveal', async (_, p) => { shell.showItemInFolder(p); return true; });
+ipcMain.handle('system:clipboardWrite', async (_, text) => { clipboard.writeText(String(text??'')); return true; });
 ipcMain.handle('system:openExternal', async (_, rawUrl) => {
   const url=new URL(String(rawUrl||''));
   if(url.protocol!=='https:')throw new Error('Solo se permiten enlaces HTTPS');
@@ -453,8 +462,70 @@ ipcMain.handle('system:openExternal', async (_, rawUrl) => {
   return true;
 });
 ipcMain.handle('extensions:networkRequest', async (_, extensionId, request) => extensionNetworkRequest(extensionId,request));
-async function searchFiles(root, query, results = []) { if (!query || results.length >= 150) return results; for (const e of await fsp.readdir(root, { withFileTypes: true })) { if (results.length >= 150) break; if (['node_modules','.git','dist','out'].includes(e.name)) continue; const p = path.join(root,e.name); if (e.isDirectory()) await searchFiles(p,query,results); else { try { const s = await fsp.stat(p); if (s.size > 2_000_000) continue; const lines=(await fsp.readFile(p,'utf8')).split(/\r?\n/); lines.forEach((line,i)=>{ if(results.length<150 && line.toLowerCase().includes(query.toLowerCase())) results.push({path:p,line:i+1,text:line.trim().slice(0,180)}); }); } catch {} } } return results; }
-ipcMain.handle('workspace:search', async (_, root, query) => searchFiles(root, query));
+async function searchFiles(root, query, results = [], options = {}) {
+  if (!query || results.length >= 500) return results;
+  const matchCase=Boolean(options.matchCase),needle=matchCase?String(query):String(query).toLowerCase();
+  for (const e of await fsp.readdir(root, { withFileTypes: true })) {
+    if (results.length >= 500) break;
+    if (['node_modules','.git','dist','out','build','target','.next','coverage'].includes(e.name)) continue;
+    const p = path.join(root,e.name);
+    if (e.isDirectory()) await searchFiles(p,query,results,options);
+    else {
+      try {
+        const s = await fsp.stat(p);
+        if (s.size > 2_000_000) continue;
+        const lines=(await fsp.readFile(p,'utf8')).split(/\r?\n/);
+        lines.forEach((line,i)=>{
+          if(results.length>=500)return;
+          const hay=matchCase?line:line.toLowerCase();
+          const column=hay.indexOf(needle);
+          if(column>=0)results.push({path:p,line:i+1,column:column+1,text:line.trim().slice(0,220)});
+        });
+      } catch {}
+    }
+  }
+  return results;
+}
+async function replaceInWorkspace(root, query, replacement, options = {}) {
+  if(!query)throw new Error('Escribe un texto para buscar');
+  const matchCase=Boolean(options.matchCase),needle=matchCase?String(query):String(query).toLowerCase();
+  let filesChanged=0,replacements=0,filesScanned=0;
+  async function walk(dir){
+    for(const e of await fsp.readdir(dir,{withFileTypes:true})){
+      if(['node_modules','.git','dist','out','build','target','.next','coverage'].includes(e.name))continue;
+      const p=path.join(dir,e.name);
+      if(e.isDirectory()){await walk(p);continue;}
+      try{
+        const st=await fsp.stat(p);
+        if(st.size>2_000_000)continue;
+        const original=await fsp.readFile(p,'utf8');
+        filesScanned++;
+        const hay=matchCase?original:original.toLowerCase();
+        if(!hay.includes(needle))continue;
+        let next='',cursor=0,count=0;
+        while(true){
+          const source=matchCase?original:original.toLowerCase();
+          const idx=source.indexOf(needle,cursor);
+          if(idx<0){next+=original.slice(cursor);break;}
+          next+=original.slice(cursor,idx)+String(replacement??'');
+          cursor=idx+String(query).length;
+          count++;
+          if(count>100000)throw new Error('Demasiadas coincidencias en '+p);
+        }
+        if(next!==original){
+          await fsp.writeFile(p,next,'utf8');
+          filesChanged++;replacements+=count;
+        }
+      }catch(error){
+        if(error?.code==='EISDIR')continue;
+      }
+    }
+  }
+  await walk(root);
+  return {filesChanged,replacements,filesScanned};
+}
+ipcMain.handle('workspace:search', async (_, root, query, options={}) => searchFiles(root, query, [], options));
+ipcMain.handle('workspace:replace', async (_, root, query, replacement, options={}) => replaceInWorkspace(root, query, replacement, options));
 let materialIcons;
 function getMaterialIcons(){
   if(!materialIcons){
