@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const {scanExtensionFiles,combineSecurityReports,assertExtensionSafe,shouldInspectFile}=require('./extensionSecurity');
 
-const DEFAULT_MARKETPLACE_URL = 'https://axiomcode-marketplace.onrender.com/api/catalog?features=intellicode';
+const DEFAULT_MARKETPLACE_URL = 'https://axiomcode-marketplace.onrender.com/api/catalog?features=rendererRuntime';
 const MAX_CATALOG_BYTES = Number.POSITIVE_INFINITY;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_EXTENSION_TOTAL_BYTES = 512 * 1024 * 1024;
@@ -12,8 +12,7 @@ const MAX_REPOSITORY_TREE_BYTES = 16 * 1024 * 1024;
 const REPOSITORY_DOWNLOAD_CONCURRENCY = 16;
 const TRUSTED_OFFICIAL_REPOSITORIES = new Map([
   ['axiom.scratch-mode',{owner:'Tylerpro09',repo:'AxiomCode',subdir:'extensions/scratch-mode'}],
-  ['axiom.runner',{owner:'Tylerpro09',repo:'AxiomCode',subdir:'extensions/runner'}],
-  ['axiom.intellicode',{owner:'Tylerpro09',repo:'AxiomCode',subdir:'extensions/intellicode'}]
+  ['axiom.runner',{owner:'Tylerpro09',repo:'AxiomCode',subdir:'extensions/runner'}]
 ]);
 
 class AxiomExtensionService {
