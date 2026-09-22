@@ -258,6 +258,27 @@
   function deactivate(){active=false;disposeAll();host=null;engine=new LocalIntelliEngine();return true;}
   function rebuild(){if(!active||!host)return status();return engine.rebuild(host.getModels?host.getModels():host.monaco.editor.getModels());}
   function status(){return {active,supportedLanguages:[...SUPPORTED],...engine.status(),cloud:false,telemetry:false};}
+  function runCommand(id){
+    if(id==='intellicode.status'){
+      const s=status();
+      if(host?.info){
+        const languages=(s.supportedLanguages||[]).join(', ');
+        host.info('Axiom IntelliCode',
+          '<p><b>'+(s.active?'Activo':'Instalado')+'</b> · motor local, sin nube ni telemetría.</p>'+
+          '<p>Modelos: '+Number(s.models||0)+' · tokens: '+Number(s.tokens||0).toLocaleString()+
+          ' · símbolos: '+Number(s.symbols||0).toLocaleString()+'</p>'+
+          '<p>Lenguajes: '+languages.replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))+'</p>'
+        );
+      }
+      return s;
+    }
+    if(id==='intellicode.rebuild'){
+      const s=rebuild();
+      host?.status?.('Axiom IntelliCode: '+Number(s.tokens||0).toLocaleString()+' tokens indexados');
+      return s;
+    }
+    throw new Error('Comando no reconocido: '+id);
+  }
 
-  return {LocalIntelliEngine,tokenise,activate,deactivate,rebuild,status,version:'1.0.0'};
+  return {LocalIntelliEngine,tokenise,activate,deactivate,rebuild,status,runCommand,version:'1.0.0'};
 });
