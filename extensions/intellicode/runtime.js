@@ -601,6 +601,7 @@
   let profileOverride='auto';
   let projectIndexEnabled=true;
   let aiClient=null;
+  let aiApiKey='';
   let aiModels=[];
   let aiModel='';
   let aiInlineEnabled=false;
@@ -611,15 +612,11 @@
 
 
   function getAiKey(){
-    try{return String(sessionStorage.getItem('axiom.intellicode.victors.key')||'').trim();}catch{return '';}
+    return String(aiApiKey||'').trim();
   }
   function setAiKey(value){
-    const key=String(value||'').trim();
-    try{
-      if(key)sessionStorage.setItem('axiom.intellicode.victors.key',key);
-      else sessionStorage.removeItem('axiom.intellicode.victors.key');
-    }catch{}
-    return Boolean(key);
+    aiApiKey=String(value||'').trim();
+    return Boolean(aiApiKey);
   }
   function createDialog(title,message,kind='text',options=[]){
     return new Promise(resolve=>{
@@ -676,7 +673,32 @@
     });
   }
   function ensureAiClient(){
-    if(!aiClient)aiClient=new VictorsAIClient({keyProvider:getAiKey});
+    if(!host?.network?.request)throw victorsError(null,'Esta función de IA requiere una versión de AxiomCode con la API genérica de red para extensiones.','CORE_NETWORK_REQUIRED',null);
+    if(!aiClient){
+      const bridgeFetch=async(url,options={})=>{
+        const raw=await host.network.request({
+          url,
+          method:options.method||'GET',
+          headers:options.headers||{},
+          body:options.body,
+          timeoutMs:30000
+        });
+        const headers=raw?.headers&&typeof raw.headers==='object'?raw.headers:{};
+        const headerEntries=Object.entries(headers).map(([name,value])=>[String(name).toLowerCase(),String(value)]);
+        const headerMap=new Map(headerEntries);
+        return {
+          status:Number(raw?.status)||0,
+          ok:Boolean(raw?.ok),
+          url:String(raw?.url||url),
+          headers:{get:name=>headerMap.get(String(name||'').toLowerCase())??null},
+          json:async()=>{
+            try{return JSON.parse(String(raw?.text||''));}
+            catch{throw new Error('Victorsia Free devolvió una respuesta JSON no válida');}
+          }
+        };
+      };
+      aiClient=new VictorsAIClient({keyProvider:getAiKey,fetchFn:bridgeFetch});
+    }
     return aiClient;
   }
   function friendlyAiError(error,quiet=false){
@@ -686,6 +708,7 @@
       if(code==='PROVIDER_OFFLINE')host?.info?.('Axiom IntelliCode IA','<p>Victorsia Free está offline temporalmente.</p>');
       else if(code==='AUTH')host?.info?.('Axiom IntelliCode IA','<p>La API key fue rechazada. Revisa la API key y vuelve a configurarla.</p>');
       else if(code==='NO_API_KEY')host?.info?.('Axiom IntelliCode IA','<p>Configura primero la API key de Victorsia Free.</p>');
+      else if(code==='CORE_NETWORK_REQUIRED')host?.info?.('Axiom IntelliCode IA','<p>Actualiza AxiomCode para habilitar la API genérica de red requerida por esta extensión.</p>');
       else host?.info?.('Axiom IntelliCode IA','<p>'+htmlEscape(String(error?.message||error))+'</p>');
     }
     return null;
@@ -1280,7 +1303,7 @@
       aiInlineEnabled=false;
       aiModel='';
     }
-    aiClient=new VictorsAIClient({keyProvider:getAiKey});
+    aiClient=null;
     aiModels=[];
     aiLastDiagnostic=null;
     const initialWorkspace=host.getWorkspace?.();
@@ -1320,6 +1343,11 @@
   function deactivate(){
     active=false;
     disposeAll();
+    aiApiKey='';
+    aiClient=null;
+    aiModels=[];
+    aiLastDiagnostic=null;
+    aiInlineCache.clear();
     host=null;
     projectEngine=new LocalIntelliEngine('project');
     liveEngine=new LocalIntelliEngine('live');
