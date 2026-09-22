@@ -1,8 +1,8 @@
 {
   "id": "axiom.intellicode",
   "name": "Axiom IntelliCode",
-  "version": "1.0.1",
-  "description": "Autocompletado inteligente local creado desde cero para AxiomCode. Aprende del código abierto en el editor, combina contexto n-gram, símbolos y plantillas por lenguaje, sin nube ni telemetría.",
+  "version": "1.1.0",
+  "description": "Autocompletado inteligente local avanzado para AxiomCode: indexación multiarchivo, contexto n-gram de hasta 3 tokens, miembros, símbolos, ghost text, plantillas y perfiles adaptativos, sin nube ni telemetría.",
   "publisher": "AxiomCode",
   "installedByDefault": false,
   "keywords": [
@@ -15,7 +15,12 @@
     "python",
     "java",
     "rust",
-    "go"
+    "go",
+    "multi-file",
+    "project-index",
+    "ghost-text",
+    "local-ai",
+    "performance"
   ],
   "contributes": {
     "rendererRuntime": {
@@ -31,8 +36,18 @@
       },
       {
         "id": "intellicode.rebuild",
-        "title": "Axiom IntelliCode: Reconstruir modelo local",
+        "title": "Axiom IntelliCode: Reindexar proyecto",
         "method": "rebuild"
+      },
+      {
+        "id": "intellicode.toggle",
+        "title": "Axiom IntelliCode: Activar/Pausar",
+        "method": "toggle"
+      },
+      {
+        "id": "intellicode.clear",
+        "title": "Axiom IntelliCode: Limpiar y reconstruir aprendizaje",
+        "method": "clear"
       }
     ]
   }
