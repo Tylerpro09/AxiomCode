@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "AxiomCode Marketplace",
-  "generatedAt": "2026-09-22T00:57:12.443Z",
+  "generatedAt": "2026-09-22T01:07:58.968Z",
   "extensions": [
     {
       "id": "axiom.scratch-mode",
@@ -50,7 +50,7 @@
     {
       "id": "axiom.intellicode",
       "name": "Axiom IntelliCode",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Autocompletado inteligente local creado desde cero para AxiomCode. Aprende del código abierto, combina contexto n-gram, símbolos y plantillas por lenguaje, sin nube ni telemetría.",
       "publisher": "AxiomCode",
       "verified": true,
