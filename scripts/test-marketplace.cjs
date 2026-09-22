@@ -6,7 +6,7 @@ const {AxiomExtensionService,DEFAULT_MARKETPLACE_URL}=require('../backend/servic
 function fakeApp(root){return {getPath(name){assert.equal(name,'userData');return root;}}}
 
 test('AxiomCode uses Render marketplace API by default',()=>{
-  assert.equal(DEFAULT_MARKETPLACE_URL,'https://axiomcode-marketplace.onrender.com/api/catalog?features=rendererRuntime');
+  assert.equal(DEFAULT_MARKETPLACE_URL,'https://axiomcode-marketplace.onrender.com/api/catalog?features=rendererRuntime,rendererRuntimeNetwork');
 });
 
 test('packaged fallback contains only core repository extensions',async()=>{
@@ -32,7 +32,7 @@ test('server catalog exposes IntelliCode only as a repository package',()=>{
   const intellicode=serverCatalog.extensions.find(x=>x.id==='axiom.intellicode');
   assert.ok(intellicode);
   assert.equal(intellicode.version,'1.3.0');
-  assert.equal(intellicode.requiresFeature,'rendererRuntime');
+  assert.equal(intellicode.requiresFeature,'rendererRuntimeNetwork');
   assert.equal(intellicode.install.kind,'repository');
   assert.equal(intellicode.install.subdir,'extensions/intellicode');
   const manifest=JSON.parse(fs.readFileSync(path.resolve(__dirname,'..','extensions','intellicode','extension.json'),'utf8'));
