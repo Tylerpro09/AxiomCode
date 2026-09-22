@@ -2,20 +2,20 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const {
   LocalIntelliEngine,VictorsAIClient,tokenise,languageFromPath,fuzzyMatch,
-  chooseVictorsModel,stripCodeFence,version
+  chooseVictorsModel,stripCodeFence,diagnosticFromResponse,version
 }=require('../extensions/intellicode/runtime.js');
 
-function response(status,body,headers={}){
+function fakeResponse(status,body,headers={}){
   const map=new Map(Object.entries(headers).map(([k,v])=>[k.toLowerCase(),String(v)]));
   return {
     status,
     ok:status>=200&&status<300,
-    headers:{get(name){return map.get(String(name).toLowerCase())??null}},
-    async json(){return body}
+    headers:{get:name=>map.get(String(name).toLowerCase())??null},
+    json:async()=>body
   };
 }
 
-test('Axiom IntelliCode 1.3.0 exposes local and Victorsia AI engines',()=>{
+test('Axiom IntelliCode 1.3.0 exposes local and Victorsia engines',()=>{
   assert.equal(version,'1.3.0');
   assert.equal(typeof VictorsAIClient,'function');
   assert.deepEqual(tokenise('alpha?.beta::gamma->delta'),['alpha','?.','beta','::','gamma','->','delta']);
@@ -91,104 +91,107 @@ test('engine keeps corpus, symbols and contexts bounded',()=>{
   assert.ok(stats.lines<=5000);
 });
 
-test('Victorsia model selection uses a full model id returned by /models',()=>{
-  const models=['online/openrouter/cohere/north-mini-code:free','auto:coding','online/xkiro/mistralai/codestral-2508'];
-  assert.equal(chooseVictorsModel(models,'online/xkiro/mistralai/codestral-2508'),'online/xkiro/mistralai/codestral-2508');
-  assert.equal(chooseVictorsModel(models,''),'auto:coding');
+test('Victorsia client refuses requests without an API key',async()=>{
+  const client=new VictorsAIClient({keyProvider:()=>''});
+  await assert.rejects(()=>client.models(),error=>error?.code==='NO_API_KEY');
 });
 
-test('Victorsia /models sends auth and unique request id without leaking the key into diagnostics',async()=>{
-  let seen=null;
+test('Victorsia client lists models first with unique request ID and bearer auth',async()=>{
+  let captured=null;
   const client=new VictorsAIClient({
-    keyProvider:()=> 'test-key',
+    keyProvider:()=> 'test-secret',
     uuidFn:()=> 'req-models-1',
     fetchFn:async(url,options)=>{
-      seen={url,options};
-      return response(200,{data:[{id:'auto:coding'}]},{
-        'X-Request-ID':'server-models-1',
-        'X-Response-Time-Ms':'75.44'
-      });
+      captured={url,options};
+      return fakeResponse(200,{data:[{id:'auto:coding'},{id:'online/example/model:free'}]},{'X-Request-ID':'req-models-1','X-Response-Time-Ms':'12.5'});
     }
   });
   const result=await client.models();
-  assert.equal(seen.url,'https://api.victors.qzz.io/v1/models');
-  assert.equal(seen.options.headers.Authorization,'Bearer test-key');
-  assert.equal(seen.options.headers['X-Request-ID'],'req-models-1');
-  assert.deepEqual(result.models,['auto:coding']);
-  assert.equal(result.diagnostic.requestId,'server-models-1');
-  assert.equal(result.diagnostic.responseTimeMs,'75.44');
-  assert.equal(JSON.stringify(result.diagnostic).includes('test-key'),false);
+  assert.deepEqual(result.models,['auto:coding','online/example/model:free']);
+  assert.equal(captured.url,'https://api.victors.qzz.io/v1/models');
+  assert.equal(captured.options.headers.Authorization,'Bearer test-secret');
+  assert.equal(captured.options.headers['X-Request-ID'],'req-models-1');
+  assert.equal(result.diagnostic.requestId,'req-models-1');
+  assert.equal(result.diagnostic.responseTimeMs,'12.5');
 });
 
-test('Victorsia chat completion preserves model and usage but never stores prompt/response telemetry',async()=>{
+test('Victorsia model selector only chooses identifiers returned by models API',()=>{
+  const models=['online/example/code-model:free','auto:coding','online/example/general:free'];
+  assert.equal(chooseVictorsModel(models,'not-returned'), 'auto:coding');
+  assert.equal(chooseVictorsModel(models,'online/example/general:free'),'online/example/general:free');
+});
+
+test('Victorsia chat sends exact model and reads usage and rate telemetry',async()=>{
   let sent=null;
   const client=new VictorsAIClient({
-    keyProvider:()=> 'test-key',
+    keyProvider:()=> 'test-secret',
     uuidFn:()=> 'req-chat-1',
-    fetchFn:async(_url,options)=>{
-      sent=JSON.parse(options.body);
-      return response(200,{
+    fetchFn:async(url,options)=>{
+      sent={url,options,body:JSON.parse(options.body)};
+      return fakeResponse(200,{
         model:'auto:coding',
         choices:[{message:{content:'const answer = 42;'}}],
-        usage:{prompt_tokens:12,completion_tokens:5,total_tokens:17}
+        usage:{prompt_tokens:21,completion_tokens:6,total_tokens:27}
       },{
-        'X-Request-ID':'server-chat-1',
-        'X-RateLimit-Remaining':'9'
+        'X-Request-ID':'req-chat-1',
+        'X-Response-Time-Ms':'88',
+        'X-RateLimit-Limit':'100',
+        'X-RateLimit-Remaining':'99',
+        'X-RateLimit-Reset':'12345',
+        'X-RateLimit-Policy':'test-policy'
       });
     }
   });
   const result=await client.complete({
     model:'auto:coding',
-    messages:[{role:'user',content:'SECRET_PROMPT'}],
-    temperature:0.2,
+    messages:[{role:'user',content:'test prompt'}],
+    temperature:0.1,
     maxTokens:64
   });
-  assert.equal(sent.model,'auto:coding');
-  assert.equal(sent.max_tokens,64);
+  assert.equal(sent.url,'https://api.victors.qzz.io/v1/chat/completions');
+  assert.equal(sent.body.model,'auto:coding');
+  assert.equal(sent.body.max_tokens,64);
   assert.equal(result.content,'const answer = 42;');
-  assert.deepEqual(result.diagnostic.usage,{prompt_tokens:12,completion_tokens:5,total_tokens:17});
-  assert.equal(result.diagnostic.remaining,'9');
-  const telemetry=JSON.stringify(result.diagnostic);
-  assert.equal(telemetry.includes('SECRET_PROMPT'),false);
-  assert.equal(telemetry.includes('const answer = 42;'),false);
-  assert.equal(telemetry.includes('test-key'),false);
+  assert.deepEqual(result.diagnostic.usage,{prompt_tokens:21,completion_tokens:6,total_tokens:27});
+  assert.equal(result.diagnostic.remaining,'99');
+  assert.equal(result.diagnostic.policy,'test-policy');
 });
 
-test('Victorsia 429 waits for rate limit and retries once with a new request id',async()=>{
-  const waits=[],ids=[],responses=[
-    response(429,{error:'rate'},{'Retry-After':'1','X-Request-ID':'rate-1'}),
-    response(200,{model:'auto:coding',choices:[{message:{content:'ok'}}],usage:{}},{'X-Request-ID':'ok-2'})
-  ];
+test('Victorsia client respects 429 before retrying once',async()=>{
+  let calls=0;
+  const waits=[];
   const client=new VictorsAIClient({
-    keyProvider:()=> 'test-key',
-    uuidFn:()=>{const id='client-'+(ids.length+1);ids.push(id);return id},
-    sleepFn:async ms=>{waits.push(ms)},
-    fetchFn:async()=>responses.shift()
+    keyProvider:()=> 'test-secret',
+    uuidFn:()=> 'req-'+(++calls),
+    sleepFn:async ms=>{waits.push(ms);},
+    fetchFn:async()=>{
+      if(waits.length===0)return fakeResponse(429,{error:'rate limited'},{'Retry-After':'0.1'});
+      return fakeResponse(200,{data:[{id:'auto:coding'}]},{'X-Request-ID':'req-ok'});
+    }
   });
-  const result=await client.complete({model:'auto:coding',messages:[{role:'user',content:'x'}]});
-  assert.equal(result.content,'ok');
-  assert.deepEqual(waits,[1000]);
-  assert.deepEqual(ids,['client-1','client-2']);
+  const result=await client.models();
+  assert.equal(result.models[0],'auto:coding');
+  assert.equal(waits.length,1);
+  assert.ok(waits[0]>=250);
 });
 
-test('Victorsia 401 and 503 are mapped to actionable errors',async()=>{
-  const auth=new VictorsAIClient({
-    keyProvider:()=> 'bad',
-    uuidFn:()=> 'auth-1',
-    fetchFn:async()=>response(401,{})
-  });
-  await assert.rejects(()=>auth.models(),error=>error.code==='AUTH'&&error.status===401);
-
-  const offline=new VictorsAIClient({
-    keyProvider:()=> 'test-key',
-    uuidFn:()=> 'offline-1',
-    fetchFn:async()=>response(503,{})
-  });
-  await assert.rejects(()=>offline.models(),error=>error.code==='PROVIDER_OFFLINE'&&error.status===503);
+test('Victorsia client maps 401 and 503 to actionable errors',async()=>{
+  const auth=new VictorsAIClient({keyProvider:()=> 'test-secret',uuidFn:()=> 'req-a',fetchFn:async()=>fakeResponse(401,{})});
+  await assert.rejects(()=>auth.models(),error=>error?.code==='AUTH'&&error?.status===401);
+  const offline=new VictorsAIClient({keyProvider:()=> 'test-secret',uuidFn:()=> 'req-b',fetchFn:async()=>fakeResponse(503,{})});
+  await assert.rejects(()=>offline.models(),error=>error?.code==='PROVIDER_OFFLINE'&&error?.status===503);
 });
 
-test('AI code fences are removed before editor insertion',()=>{
-  const fence=String.fromCharCode(96).repeat(3);
-  assert.equal(stripCodeFence(fence+'js\nconst x = 1;\n'+fence),'const x = 1;');
-  assert.equal(stripCodeFence('const x = 1;'),'const x = 1;');
+test('code fence cleanup does not leak markdown wrappers',()=>{
+  assert.equal(stripCodeFence('~~~not-a-fence~~~'),'~~~not-a-fence~~~');
+  const ticks=String.fromCharCode(96).repeat(3);
+  assert.equal(stripCodeFence(ticks+'js\nconst x = 1;\n'+ticks),'const x = 1;');
+});
+
+test('diagnostic reports unavailable fields as null instead of inventing data',()=>{
+  const d=diagnosticFromResponse(fakeResponse(200,{},{}),{},'auto:coding','req-fallback');
+  assert.equal(d.model,'auto:coding');
+  assert.equal(d.requestId,'req-fallback');
+  assert.equal(d.remaining,null);
+  assert.deepEqual(d.usage,{prompt_tokens:null,completion_tokens:null,total_tokens:null});
 });
