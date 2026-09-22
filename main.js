@@ -497,9 +497,20 @@ ipcMain.handle('system:openExternal', async (_, rawUrl) => {
   return true;
 });
 ipcMain.handle('extensions:networkRequest', async (_, extensionId, request) => extensionNetworkRequest(extensionId,request));
+function searchPattern(query,options={}){
+  const raw=String(query||'');
+  if(!raw)throw new Error('Escribe un texto para buscar');
+  if(raw.length>500)throw new Error('La búsqueda supera 500 caracteres');
+  const flags='g'+(options.matchCase?'':'i');
+  if(options.regex){
+    try{return new RegExp(raw,flags);}catch(error){throw new Error('Expresión regular no válida: '+error.message);}
+  }
+  const escaped=raw.replace(/[|\\{}()[\]^$+*?.-]/g,'\\$&');
+  return new RegExp(options.wholeWord?'\\b(?:'+escaped+')\\b':escaped,flags);
+}
 async function searchFiles(root, query, results = [], options = {}) {
   if (!query || results.length >= 500) return results;
-  const matchCase=Boolean(options.matchCase),needle=matchCase?String(query):String(query).toLowerCase();
+  const pattern=searchPattern(query,options);
   for (const e of await fsp.readdir(root, { withFileTypes: true })) {
     if (results.length >= 500) break;
     if (['node_modules','.git','dist','out','build','target','.next','coverage'].includes(e.name)) continue;
@@ -509,12 +520,12 @@ async function searchFiles(root, query, results = [], options = {}) {
       try {
         const s = await fsp.stat(p);
         if (s.size > 2_000_000) continue;
-        const lines=(await fsp.readFile(p,'utf8')).split(/\r?\n/);
-        lines.forEach((line,i)=>{
+        const fileLines=(await fsp.readFile(p,'utf8')).split(/\r?\n/);
+        fileLines.forEach((line,i)=>{
           if(results.length>=500)return;
-          const hay=matchCase?line:line.toLowerCase();
-          const column=hay.indexOf(needle);
-          if(column>=0)results.push({path:p,line:i+1,column:column+1,text:line.trim().slice(0,220)});
+          pattern.lastIndex=0;
+          const match=pattern.exec(line);
+          if(match)results.push({path:p,line:i+1,column:match.index+1,length:Math.max(1,match[0].length),text:line.trim().slice(0,220)});
         });
       } catch {}
     }
@@ -522,8 +533,7 @@ async function searchFiles(root, query, results = [], options = {}) {
   return results;
 }
 async function replaceInWorkspace(root, query, replacement, options = {}) {
-  if(!query)throw new Error('Escribe un texto para buscar');
-  const matchCase=Boolean(options.matchCase),needle=matchCase?String(query):String(query).toLowerCase();
+  const pattern=searchPattern(query,options);
   let filesChanged=0,replacements=0,filesScanned=0;
   async function walk(dir){
     for(const e of await fsp.readdir(dir,{withFileTypes:true})){
@@ -535,24 +545,30 @@ async function replaceInWorkspace(root, query, replacement, options = {}) {
         if(st.size>2_000_000)continue;
         const original=await fsp.readFile(p,'utf8');
         filesScanned++;
-        const hay=matchCase?original:original.toLowerCase();
-        if(!hay.includes(needle))continue;
-        let next='',cursor=0,count=0;
-        while(true){
-          const source=matchCase?original:original.toLowerCase();
-          const idx=source.indexOf(needle,cursor);
-          if(idx<0){next+=original.slice(cursor);break;}
-          next+=original.slice(cursor,idx)+String(replacement??'');
-          cursor=idx+String(query).length;
+        pattern.lastIndex=0;
+        let count=0;
+        const next=original.replace(pattern,(...args)=>{
           count++;
           if(count>100000)throw new Error('Demasiadas coincidencias en '+p);
-        }
-        if(next!==original){
+          if(options.regex){
+            const match=args[0];
+            const captures=args.slice(1,-2);
+            return String(replacement??'').replace(/\$(\$|&|[1-9][0-9]?)/g,(token,key)=>{
+              if(key==='$')return '$';
+              if(key==='&')return match;
+              const index=Number(key)-1;
+              return Number.isInteger(index)&&index>=0&&index<captures.length&&captures[index]!==undefined?String(captures[index]):token;
+            });
+          }
+          return String(replacement??'');
+        });
+        if(count&&next!==original){
           await fsp.writeFile(p,next,'utf8');
           filesChanged++;replacements+=count;
         }
       }catch(error){
         if(error?.code==='EISDIR')continue;
+        if(/Demasiadas coincidencias/.test(String(error?.message||'')))throw error;
       }
     }
   }
