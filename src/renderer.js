@@ -2,7 +2,7 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let editor=null,workspace=null,activePath=null,iconManifest=null,paletteMode='commands',paletteItems=[],sideMode='explorer',panelMode='terminal',sidebarVisible=true,scratchInstalled=false,runnerInstalled=false,scratchAssetsLoaded=false,appUpdate=null,updateBusy=false;
 const tabs=new Map(), terminalState={sessions:new Map(),active:null};
 const extensionRuntimes=new Map(), extensionCommands=new Map();
-const outputLog=[], debugLog=[];let autoSaveTimer=null;
+const outputLog=[], debugLog=[];let autoSaveTimer=null,explorerClipboard=null,explorerSelection=null;
 async function ensureScratchAssetsLoaded(){
   if(scratchAssetsLoaded&&window.AxiomScratch)return true;
   if(!scratchInstalled)return false;
@@ -297,17 +297,43 @@ function fileIconId(name){if(!iconManifest)return'file';const exact=iconManifest
 function folderIconId(name,open){if(!iconManifest)return open?'folder-open':'folder';const map=open?iconManifest.folderNamesExpanded:iconManifest.folderNames,low=name.toLowerCase();return map?.[name]||map?.[low]||(open?iconManifest.folderExpanded:iconManifest.folder)||'folder';}
 const iconHtml=id=>`<img class="theme-icon" draggable="false" src="${iconSrc(id)}">`;
 function showCode(on){$('#welcome').style.display=on?'none':'flex';$('#editor').style.display=on?'block':'none';}
+function rebuildTabOrder(entries){
+  tabs.clear();
+  for(const [key,value] of entries)tabs.set(key,value);
+}
+function normalizePinnedTabs(){
+  const entries=[...tabs.entries()];
+  const pinned=entries.filter(([,t])=>t.pinned),normal=entries.filter(([,t])=>!t.pinned);
+  rebuildTabOrder([...pinned,...normal]);
+}
+function togglePinTab(p){
+  const tab=tabs.get(p);if(!tab)return;
+  tab.pinned=!tab.pinned;
+  normalizePinnedTabs();renderTabs();
+  setStatus((tab.pinned?'Fijado: ':'Desfijado: ')+basename(p));
+}
+function reorderTab(source,target){
+  if(!source||!target||source===target||!tabs.has(source)||!tabs.has(target))return;
+  const entries=[...tabs.entries()];
+  const from=entries.findIndex(([key])=>key===source),to=entries.findIndex(([key])=>key===target);
+  const [item]=entries.splice(from,1);
+  entries.splice(to,0,item);
+  rebuildTabOrder(entries);renderTabs();
+}
 function showTabContextMenu(x,y,p){
   document.querySelector('.context-menu')?.remove();
   const keys=[...tabs.keys()],index=keys.indexOf(p);
   const m=document.createElement('div');m.className='context-menu';
-  m.innerHTML='<button data-a="close">Cerrar</button><button data-a="others">Cerrar otros</button><button data-a="right">Cerrar a la derecha</button><div></div><button data-a="copy">Copiar ruta</button><button data-a="copyrel">Copiar ruta relativa</button><button data-a="reveal">Mostrar en Explorador</button>';
+  const tab=tabs.get(p);
+  m.innerHTML='<button data-a="pin">'+(tab?.pinned?'Desfijar editor':'Fijar editor')+'</button><button data-a="close">Cerrar</button><button data-a="others">Cerrar otros</button><button data-a="right">Cerrar a la derecha</button><button data-a="all">Cerrar todos los no fijados</button><div></div><button data-a="copy">Copiar ruta</button><button data-a="copyrel">Copiar ruta relativa</button><button data-a="reveal">Mostrar en Explorador</button>';
   m.style.left=x+'px';m.style.top=y+'px';
   m.onclick=async e=>{
     const a=e.target.dataset.a;if(!a)return;
+    if(a==='pin')togglePinTab(p);
     if(a==='close')closeTab(p);
-    if(a==='others')for(const key of [...tabs.keys()])if(key!==p)closeTab(key);
-    if(a==='right')for(const key of keys.slice(index+1))closeTab(key);
+    if(a==='others')for(const key of [...tabs.keys()])if(key!==p&&!tabs.get(key)?.pinned)closeTab(key);
+    if(a==='right')for(const key of keys.slice(index+1))if(!tabs.get(key)?.pinned)closeTab(key);
+    if(a==='all')for(const key of [...tabs.keys()])if(!tabs.get(key)?.pinned)closeTab(key);
     if(a==='copy')await window.axiom.clipboardWrite(p);
     if(a==='copyrel')await window.axiom.clipboardWrite(relativeToWorkspace(p));
     if(a==='reveal')window.axiom.reveal(p);
@@ -315,8 +341,28 @@ function showTabContextMenu(x,y,p){
   };
   document.body.appendChild(m);setTimeout(()=>document.addEventListener('click',()=>m.remove(),{once:true}),0);
 }
-function renderTabs(){const host=$('#tabs');host.innerHTML='';if(!tabs.size){host.innerHTML='<div class="welcome-tab">Inicio</div>';return;}tabs.forEach((t,p)=>{const el=document.createElement('div');el.className='tab'+(p===activePath?' active':'');el.title=p;el.innerHTML=`${iconHtml(fileIconId(basename(p)))}<span class="tab-name">${escapeHtml(basename(p))}</span>${t.dirty?'<span class="dirty">●</span>':''}<button class="tab-close" aria-label="Cerrar">×</button>`;el.onclick=e=>{if(!e.target.closest('.tab-close'))activate(p);};el.onauxclick=e=>{if(e.button===1)closeTab(p);};el.oncontextmenu=e=>{e.preventDefault();showTabContextMenu(e.clientX,e.clientY,p);};el.querySelector('.tab-close').onclick=e=>{e.stopPropagation();closeTab(p);};host.appendChild(el);});}
-async function openFile(p,line){if(/\.(axiomscratch|sb3|sb2|sb)$/i.test(p))return openScratchMode(p);try{if(!tabs.has(p)){const r=await window.axiom.readFile(p);tabs.set(p,{model:monaco.editor.createModel(r.content,fileLang(p),monaco.Uri.file(p)),dirty:false});}activate(p);if(line){editor.revealLineInCenter(line);editor.setPosition({lineNumber:line,column:1});}}catch(e){setStatus('No se pudo abrir: '+e.message);logOutput(e.message);}}
+function renderTabs(){
+  const host=$('#tabs');host.innerHTML='';
+  if(!tabs.size){host.innerHTML='<div class="welcome-tab">Inicio</div>';return;}
+  tabs.forEach((t,p)=>{
+    const el=document.createElement('div');
+    el.className='tab'+(p===activePath?' active':'')+(t.pinned?' pinned':'');
+    el.title=p+(t.pinned?' · fijado':'');
+    el.draggable=true;
+    el.innerHTML=`${t.pinned?'<span class="codicon codicon-pinned tab-pin"></span>':iconHtml(fileIconId(basename(p)))}<span class="tab-name">${escapeHtml(basename(p))}</span>${t.dirty?'<span class="dirty">●</span>':''}<button class="tab-close" aria-label="Cerrar">×</button>`;
+    el.onclick=e=>{if(!e.target.closest('.tab-close'))activate(p);};
+    el.onauxclick=e=>{if(e.button===1)closeTab(p);};
+    el.oncontextmenu=e=>{e.preventDefault();showTabContextMenu(e.clientX,e.clientY,p);};
+    el.ondragstart=e=>{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/axiom-tab',p);el.classList.add('dragging');};
+    el.ondragend=()=>el.classList.remove('dragging');
+    el.ondragover=e=>{e.preventDefault();e.dataTransfer.dropEffect='move';el.classList.add('drag-over');};
+    el.ondragleave=()=>el.classList.remove('drag-over');
+    el.ondrop=e=>{e.preventDefault();el.classList.remove('drag-over');reorderTab(e.dataTransfer.getData('text/axiom-tab'),p);};
+    el.querySelector('.tab-close').onclick=e=>{e.stopPropagation();closeTab(p);};
+    host.appendChild(el);
+  });
+}
+async function openFile(p,line){if(/\.(axiomscratch|sb3|sb2|sb)$/i.test(p))return openScratchMode(p);try{if(!tabs.has(p)){const r=await window.axiom.readFile(p);tabs.set(p,{model:monaco.editor.createModel(r.content,fileLang(p),monaco.Uri.file(p)),dirty:false,pinned:false});}activate(p);if(line){editor.revealLineInCenter(line);editor.setPosition({lineNumber:line,column:1});}}catch(e){setStatus('No se pudo abrir: '+e.message);logOutput(e.message);}}
 async function openFiles(){const paths=await window.axiom.openFiles(workspace?.root);for(const p of paths||[])await openFile(p);}
 function activate(p){window.AxiomScratch?.hide();const t=tabs.get(p);if(!t)return;activePath=p;editor.setModel(t.model);showCode(true);renderTabs();$('#language').textContent=fileLang(p);renderBreadcrumbs();editor.focus();setStatus(p);if(sideMode==='explorer')renderSideView();}
 function closeTab(p){const t=tabs.get(p);if(!t)return;if(t.dirty&&!confirm(`Hay cambios sin guardar en ${basename(p)}. ¿Cerrar?`))return;t.model.dispose();tabs.delete(p);if(activePath===p){activePath=[...tabs.keys()].pop()||null;if(activePath)activate(activePath);else{showCode(false);renderBreadcrumbs();}}renderTabs();}
