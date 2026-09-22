@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "AxiomCode Marketplace",
-  "generatedAt": "2026-09-22T02:30:52.255Z",
+  "generatedAt": "2026-09-22T03:10:10.732Z",
   "extensions": [
     {
       "id": "axiom.scratch-mode",
@@ -50,8 +50,8 @@
     {
       "id": "axiom.intellicode",
       "name": "Axiom IntelliCode",
-      "version": "1.2.0",
-      "description": "Autocompletado inteligente local avanzado con índice multiarchivo configurable, contexto de hasta 3 tokens, ranking por alcance y archivo activo, miembros, ghost text y perfiles adaptativos para PCs modestos.",
+      "version": "1.3.0",
+      "description": "Motor local avanzado más IA opcional con Victorsia Free: descubre modelos por API, completa código, explica y corrige selecciones, ofrece ghost text remoto y diagnóstico de tokens/rate limits.",
       "publisher": "AxiomCode",
       "verified": true,
       "featured": true,
@@ -70,7 +70,10 @@
         "project-index",
         "local-ai",
         "scope-aware",
-        "adaptive-memory"
+        "adaptive-memory",
+        "victorsia",
+        "remote-ai",
+        "diagnostics"
       ],
       "homepage": "https://github.com/Tylerpro09/AxiomCode/tree/main/extensions/intellicode",
       "install": {
