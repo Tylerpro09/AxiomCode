@@ -600,6 +600,280 @@
   let lastProjectError='';
   let profileOverride='auto';
   let projectIndexEnabled=true;
+  let aiClient=null;
+  let aiModels=[];
+  let aiModel='';
+  let aiInlineEnabled=false;
+  let aiLastDiagnostic=null;
+  let aiLastInlineAt=0;
+  let aiInlineInflight=null;
+  const aiInlineCache=new Map();
+
+
+  function getAiKey(){
+    try{return String(sessionStorage.getItem('axiom.intellicode.victors.key')||'').trim();}catch{return '';}
+  }
+  function setAiKey(value){
+    const key=String(value||'').trim();
+    try{
+      if(key)sessionStorage.setItem('axiom.intellicode.victors.key',key);
+      else sessionStorage.removeItem('axiom.intellicode.victors.key');
+    }catch{}
+    return Boolean(key);
+  }
+  function createDialog(title,message,kind='text',options=[]){
+    return new Promise(resolve=>{
+      const back=document.createElement('div');
+      back.dataset.axiomIntelliCodeDialog='1';
+      Object.assign(back.style,{position:'fixed',inset:'0',zIndex:'999999',background:'rgba(0,0,0,.58)',display:'grid',placeItems:'center'});
+      const box=document.createElement('div');
+      Object.assign(box.style,{width:'min(560px,calc(100vw - 32px))',background:'#1f1f1f',color:'#ddd',border:'1px solid #555',borderRadius:'8px',padding:'16px',boxShadow:'0 16px 50px rgba(0,0,0,.45)',fontFamily:'var(--vscode-font-family,Segoe UI,sans-serif)'});
+      const heading=document.createElement('div');
+      heading.textContent=title;
+      Object.assign(heading.style,{fontWeight:'600',fontSize:'15px',marginBottom:'8px'});
+      const msg=document.createElement('div');
+      msg.textContent=message||'';
+      Object.assign(msg.style,{fontSize:'12px',opacity:'.86',marginBottom:'12px',whiteSpace:'pre-wrap'});
+      let field;
+      if(kind==='select'){
+        field=document.createElement('select');
+        for(const value of options){
+          const opt=document.createElement('option');
+          opt.value=value;
+          opt.textContent=value;
+          field.appendChild(opt);
+        }
+      }else if(kind==='textarea'){
+        field=document.createElement('textarea');
+        field.rows=7;
+      }else{
+        field=document.createElement('input');
+        field.type=kind==='secret'?'password':'text';
+        field.autocomplete='off';
+      }
+      Object.assign(field.style,{boxSizing:'border-box',width:'100%',background:'#111',color:'#eee',border:'1px solid #555',borderRadius:'4px',padding:'9px',font:'inherit',resize:'vertical'});
+      const actions=document.createElement('div');
+      Object.assign(actions.style,{display:'flex',justifyContent:'flex-end',gap:'8px',marginTop:'12px'});
+      const cancel=document.createElement('button');
+      cancel.textContent='Cancelar';
+      const ok=document.createElement('button');
+      ok.textContent='Aceptar';
+      for(const button of [cancel,ok])Object.assign(button.style,{padding:'7px 12px',border:'1px solid #666',borderRadius:'4px',background:'#333',color:'#fff',cursor:'pointer'});
+      ok.style.background='#0e639c';
+      const done=value=>{field.value='';back.remove();resolve(value);};
+      cancel.onclick=()=>done(null);
+      ok.onclick=()=>done(field.value);
+      back.onclick=event=>{if(event.target===back)done(null);};
+      field.onkeydown=event=>{
+        if(event.key==='Escape'){event.preventDefault();done(null);}
+        if(kind!=='textarea'&&event.key==='Enter'){event.preventDefault();done(field.value);}
+      };
+      actions.append(cancel,ok);
+      box.append(heading,msg,field,actions);
+      back.appendChild(box);
+      document.body.appendChild(back);
+      field.focus();
+    });
+  }
+  function ensureAiClient(){
+    if(!aiClient)aiClient=new VictorsAIClient({keyProvider:getAiKey});
+    return aiClient;
+  }
+  function friendlyAiError(error,quiet=false){
+    const code=error?.code;
+    if(code==='AUTH')setAiKey('');
+    if(!quiet){
+      if(code==='PROVIDER_OFFLINE')host?.info?.('Axiom IntelliCode IA','<p>Victorsia Free está offline temporalmente.</p>');
+      else if(code==='AUTH')host?.info?.('Axiom IntelliCode IA','<p>La API key fue rechazada. Revisa la API key y vuelve a configurarla.</p>');
+      else if(code==='NO_API_KEY')host?.info?.('Axiom IntelliCode IA','<p>Configura primero la API key de Victorsia Free.</p>');
+      else host?.info?.('Axiom IntelliCode IA','<p>'+htmlEscape(String(error?.message||error))+'</p>');
+    }
+    return null;
+  }
+  async function refreshAiModels(){
+    const client=ensureAiClient();
+    const result=await client.models();
+    aiModels=result.models;
+    aiLastDiagnostic=result.diagnostic;
+    let preferred='';
+    try{preferred=localStorage.getItem('axiom.intellicode.victors.model')||'';}catch{}
+    aiModel=chooseVictorsModel(aiModels,preferred);
+    if(aiModel){try{localStorage.setItem('axiom.intellicode.victors.model',aiModel);}catch{}}
+    return aiModels;
+  }
+  async function ensureAiReady(){
+    if(!getAiKey())throw victorsError(null,'Configura la API key de Victorsia Free primero.','NO_API_KEY',null);
+    if(!aiModels.length||!aiModel)await refreshAiModels();
+    if(!aiModel)throw new Error('Victorsia Free no devolvió modelos disponibles');
+    return aiModel;
+  }
+  async function configureAi(){
+    let key=getAiKey();
+    if(!key){
+      key=await createDialog('Victorsia Free','Introduce la API key. Se mantiene solo durante esta sesión y no se registra en logs.','secret');
+      if(!key)return status();
+      setAiKey(key);
+    }
+    try{
+      host?.status?.('Axiom IntelliCode IA: consultando modelos...');
+      const models=await refreshAiModels();
+      if(!models.length)throw new Error('La API no devolvió modelos');
+      const selected=await createDialog('Modelo de IA','Selecciona un identificador completo devuelto por /v1/models.','select',models);
+      if(selected&&models.includes(selected)){
+        aiModel=selected;
+        try{localStorage.setItem('axiom.intellicode.victors.model',selected);}catch{}
+      }
+      host?.status?.('Axiom IntelliCode IA: '+aiModel);
+      return status();
+    }catch(error){
+      friendlyAiError(error);
+      return status();
+    }
+  }
+  function editorContext(maxBefore=7000,maxAfter=1800){
+    const model=host?.editor?.getModel?.();
+    const position=host?.editor?.getPosition?.();
+    if(!model||!position)return null;
+    const value=model.getValue();
+    const offset=model.getOffsetAt(position);
+    const language=model.getLanguageId?.()||'plaintext';
+    const uri=model.uri?.toString?.()||'';
+    return {
+      model,position,language,uri,
+      before:value.slice(Math.max(0,offset-maxBefore),offset),
+      after:value.slice(offset,Math.min(value.length,offset+maxAfter))
+    };
+  }
+  async function aiRequest(messages,options={}){
+    const model=await ensureAiReady();
+    const result=await ensureAiClient().complete({
+      model,messages,
+      temperature:options.temperature??0.2,
+      maxTokens:options.maxTokens??512
+    });
+    aiLastDiagnostic=result.diagnostic;
+    host?.log?.('IA Victorsia · HTTP '+(result.diagnostic?.status??'?')+' · modelo '+String(result.diagnostic?.model||model)+' · request '+String(result.diagnostic?.requestId||'N/D'));
+    return result;
+  }
+  function insertAtCursor(text){
+    const editor=host?.editor;
+    const position=editor?.getPosition?.();
+    if(!editor||!position||!text)return false;
+    editor.executeEdits('axiom.intellicode.ai',[{
+      range:new host.monaco.Range(position.lineNumber,position.column,position.lineNumber,position.column),
+      text:String(text),forceMoveMarkers:true
+    }]);
+    editor.focus();
+    return true;
+  }
+  async function aiCompleteAtCursor(){
+    try{
+      const ctx=editorContext();
+      if(!ctx)throw new Error('No hay un editor activo');
+      host?.status?.('Axiom IntelliCode IA: generando...');
+      const prompt=[
+        'Completa el código exactamente en <CURSOR>.',
+        'Lenguaje: '+ctx.language+'.',
+        'Devuelve únicamente el código que debe insertarse en el cursor, sin Markdown, sin explicación y sin repetir código existente.',
+        '',
+        ctx.before+'<CURSOR>'+ctx.after
+      ].join('\n');
+      const result=await aiRequest([{role:'user',content:prompt}],{temperature:0.15,maxTokens:384});
+      const code=stripCodeFence(result.content);
+      if(!code)throw new Error('El modelo no devolvió código');
+      insertAtCursor(code);
+      host?.status?.('Axiom IntelliCode IA: completado con '+String(aiModel));
+      return result.diagnostic;
+    }catch(error){
+      friendlyAiError(error);
+      return error?.diagnostic||null;
+    }
+  }
+  async function aiExplainSelection(){
+    try{
+      const editor=host?.editor,model=editor?.getModel?.(),selection=editor?.getSelection?.();
+      if(!model||!selection)throw new Error('No hay un editor activo');
+      const selected=model.getValueInRange(selection).slice(0,8000);
+      if(!selected.trim())throw new Error('Selecciona código para explicarlo');
+      const language=model.getLanguageId?.()||'plaintext';
+      host?.status?.('Axiom IntelliCode IA: analizando selección...');
+      const result=await aiRequest([{role:'user',content:'Explica de forma clara y breve este código '+language+'. Señala qué hace, riesgos y posibles mejoras si aplican.\n\n'+selected}],{temperature:0.25,maxTokens:700});
+      host?.info?.('Axiom IntelliCode IA · Explicación','<div style="white-space:pre-wrap">'+htmlEscape(result.content)+'</div>');
+      return result.diagnostic;
+    }catch(error){
+      friendlyAiError(error);
+      return error?.diagnostic||null;
+    }
+  }
+  async function aiFixSelection(){
+    try{
+      const editor=host?.editor,model=editor?.getModel?.(),selection=editor?.getSelection?.();
+      if(!model||!selection)throw new Error('No hay un editor activo');
+      const selected=model.getValueInRange(selection).slice(0,8000);
+      if(!selected.trim())throw new Error('Selecciona el código que quieres corregir');
+      const language=model.getLanguageId?.()||'plaintext';
+      host?.status?.('Axiom IntelliCode IA: corrigiendo selección...');
+      const result=await aiRequest([{role:'user',content:'Corrige y mejora este código '+language+'. Conserva su intención. Devuelve únicamente el código final, sin Markdown ni explicación.\n\n'+selected}],{temperature:0.15,maxTokens:900});
+      const code=stripCodeFence(result.content);
+      if(!code)throw new Error('El modelo no devolvió código');
+      if(!window.confirm('¿Reemplazar la selección con la corrección generada por IA?'))return result.diagnostic;
+      editor.executeEdits('axiom.intellicode.ai.fix',[{range:selection,text:code,forceMoveMarkers:true}]);
+      editor.focus();
+      return result.diagnostic;
+    }catch(error){
+      friendlyAiError(error);
+      return error?.diagnostic||null;
+    }
+  }
+  async function selectAiModel(){
+    try{
+      const models=await refreshAiModels();
+      const selected=await createDialog('Modelo de Victorsia Free','Selecciona el modelo completo.','select',models);
+      if(selected&&models.includes(selected)){
+        aiModel=selected;
+        try{localStorage.setItem('axiom.intellicode.victors.model',selected);}catch{}
+        host?.status?.('Axiom IntelliCode IA: modelo '+selected);
+      }
+      return status();
+    }catch(error){
+      friendlyAiError(error);
+      return status();
+    }
+  }
+  async function aiInlineCompletion(ctx){
+    if(!aiInlineEnabled||!getAiKey()||!ctx)return null;
+    const now=Date.now();
+    const cacheKeyValue=hashText(ctx.language+'\n'+ctx.before.slice(-2200)+'\n'+ctx.after.slice(0,500));
+    const cached=aiInlineCache.get(cacheKeyValue);
+    if(cached&&now-cached.time<30000)return cached.text;
+    if(aiInlineInflight||now-aiLastInlineAt<5000)return null;
+    aiLastInlineAt=now;
+    aiInlineInflight=(async()=>{
+      try{
+        const prompt=[
+          'Completa el código en <CURSOR>.',
+          'Lenguaje: '+ctx.language+'.',
+          'Devuelve solo una continuación corta de código, máximo unas pocas líneas. Sin Markdown ni explicación.',
+          '',
+          ctx.before.slice(-2600)+'<CURSOR>'+ctx.after.slice(0,700)
+        ].join('\n');
+        const result=await aiRequest([{role:'user',content:prompt}],{temperature:0.1,maxTokens:120});
+        const text=stripCodeFence(result.content);
+        if(text){
+          aiInlineCache.set(cacheKeyValue,{text,time:Date.now()});
+          while(aiInlineCache.size>24)aiInlineCache.delete(aiInlineCache.keys().next().value);
+        }
+        return text||null;
+      }catch(error){
+        if(error?.code==='AUTH'||error?.code==='PROVIDER_OFFLINE')aiInlineEnabled=false;
+        friendlyAiError(error,true);
+        return null;
+      }finally{
+        aiInlineInflight=null;
+      }
+    })();
+    return aiInlineInflight;
+  }
 
   function memoryProfile(){
     const profiles={
