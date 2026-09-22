@@ -323,6 +323,13 @@ async function readFallbackCatalog(){
   }catch(error){console.warn('fallback catalog failed:',error.message)}
   return {schemaVersion:1,name:'AxiomCode Marketplace',generatedAt:new Date().toISOString(),extensions:[]};
 }
+async function readServerCatalog(){
+  try{
+    const raw=JSON.parse(await fsp.readFile(path.join(WEB_ROOT,'catalog.json'),'utf8'));
+    if(raw&&Array.isArray(raw.extensions))return raw;
+  }catch(error){console.warn('server catalog failed:',error.message)}
+  return {schemaVersion:1,name:'AxiomCode Marketplace',generatedAt:new Date().toISOString(),extensions:[]};
+}
 function bundledScratchExtension(ext,scratch){
   const version=String(scratch?.version||ext.version||'2.4.1');
   const description=scratch?.description||ext.description||'Scratch Power para AxiomCode.';
@@ -339,9 +346,12 @@ function bundledScratchExtension(ext,scratch){
 }
 async function readCatalog(){
   const fallback=await readFallbackCatalog();
+  const serverCatalog=await readServerCatalog();
   const scratch=await latestBundledScratch();
-  const bundled=(fallback.extensions||[]).map(ext=>ext.id==='axiom.scratch-mode'?bundledScratchExtension(ext,scratch):ext);
-  if(!SUPABASE_URL||!SUPABASE_SECRET_KEY)return {...fallback,extensions:bundled};
+  const base=new Map((fallback.extensions||[]).map(ext=>[ext.id,ext]));
+  for(const ext of (serverCatalog.extensions||[]))base.set(ext.id,{...(base.get(ext.id)||{}),...ext});
+  const bundled=[...base.values()].map(ext=>ext.id==='axiom.scratch-mode'?bundledScratchExtension(ext,scratch):ext);
+  if(!SUPABASE_URL||!SUPABASE_SECRET_KEY)return {schemaVersion:1,name:'AxiomCode Marketplace',generatedAt:new Date().toISOString(),extensions:bundled};
   try{
     const rows=await sb('marketplace_extensions?select=*&status=eq.published&order=featured.desc,name.asc',{method:'GET'});
     const normalized=(rows||[]).map(row=>row.id==='axiom.scratch-mode'?bundledScratchExtension(row,scratch):row);
