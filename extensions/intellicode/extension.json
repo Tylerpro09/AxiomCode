@@ -1,8 +1,8 @@
 {
   "id": "axiom.intellicode",
   "name": "Axiom IntelliCode",
-  "version": "1.1.0",
-  "description": "Autocompletado inteligente local avanzado para AxiomCode: indexación multiarchivo, contexto n-gram de hasta 3 tokens, miembros, símbolos, ghost text, plantillas y perfiles adaptativos, sin nube ni telemetría.",
+  "version": "1.2.0",
+  "description": "Autocompletado inteligente local avanzado para AxiomCode: indexación multiarchivo configurable, contexto n-gram de hasta 3 tokens, ranking por alcance y archivo activo, miembros, ghost text y perfiles de memoria adaptativos.",
   "publisher": "AxiomCode",
   "installedByDefault": false,
   "keywords": [
@@ -20,7 +20,10 @@
     "project-index",
     "ghost-text",
     "local-ai",
-    "performance"
+    "performance",
+    "scope-aware",
+    "active-file",
+    "adaptive-memory"
   ],
   "contributes": {
     "rendererRuntime": {
@@ -48,6 +51,16 @@
         "id": "intellicode.clear",
         "title": "Axiom IntelliCode: Limpiar y reconstruir aprendizaje",
         "method": "clear"
+      },
+      {
+        "id": "intellicode.profile",
+        "title": "Axiom IntelliCode: Cambiar perfil de memoria",
+        "method": "profile"
+      },
+      {
+        "id": "intellicode.projectIndex",
+        "title": "Axiom IntelliCode: Activar/Desactivar índice de proyecto",
+        "method": "projectIndex"
       }
     ]
   }
