@@ -487,6 +487,11 @@ ipcMain.handle('git:checkout', async (_,cwd,branch)=>{
   if(!name||/[\r\n\0]/.test(name))throw new Error('Rama Git no válida');
   return runGitArgs(['checkout',name],cwd);
 });
+ipcMain.handle('git:showHead', async (_,cwd,file)=>{
+  const rel=String(file||'').replace(/\\/g,'/');
+  if(!rel||/[\r\n\0]/.test(rel))throw new Error('Ruta Git no válida');
+  return runGitArgs(['show','HEAD:'+rel],cwd);
+});
 ipcMain.handle('system:reveal', async (_, p) => { shell.showItemInFolder(p); return true; });
 ipcMain.handle('system:clipboardWrite', async (_, text) => { clipboard.writeText(String(text??'')); return true; });
 ipcMain.handle('system:openExternal', async (_, rawUrl) => {
