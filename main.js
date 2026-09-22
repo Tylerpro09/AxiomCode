@@ -440,6 +440,17 @@ async function tree(dir, depth = 0) {
   return Promise.all(visible.map(async e => ({ name: e.name, path: path.join(dir, e.name), type: e.isDirectory() ? 'dir' : 'file', children: e.isDirectory() ? await tree(path.join(dir, e.name), depth + 1) : undefined })));
 }
 function run(command, cwd) { return new Promise(resolve => exec(command, { cwd: cwd || app.getPath('home'), windowsHide: true, shell: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => resolve({ ok: !error, code: error?.code ?? 0, stdout, stderr }))); }
+function runGitArgs(args,cwd){
+  return new Promise(resolve=>{
+    const child=spawn('git',args,{cwd:cwd||app.getPath('home'),windowsHide:true,shell:false});
+    let stdout='',stderr='',settled=false;
+    const finish=(ok,code)=>{if(settled)return;settled=true;resolve({ok,code:code??0,stdout,stderr});};
+    child.stdout?.on('data',chunk=>{stdout+=String(chunk);if(stdout.length>8*1024*1024)child.kill();});
+    child.stderr?.on('data',chunk=>{stderr+=String(chunk);if(stderr.length>8*1024*1024)child.kill();});
+    child.on('error',error=>{stderr+=String(error?.message||error);finish(false,error?.code||1);});
+    child.on('close',code=>finish(code===0,code));
+  });
+}
 app.whenReady().then(async()=>{backend=createBackend(app,__dirname,safeRendererSend);await backend.configuration.load();createWindow();});
 app.on('window-all-closed', () => { backend?.watcher.dispose(); scratchService?.close(); if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
@@ -467,6 +478,15 @@ ipcMain.handle('git:status', async (_, cwd) => run('git status --porcelain -b', 
 ipcMain.handle('git:changes', async (_,cwd)=>run('git status --porcelain',cwd));
 ipcMain.handle('git:addAll', async (_,cwd)=>run('git add -A',cwd));
 ipcMain.handle('git:commit', async (_,cwd,message)=>run('git commit -m '+JSON.stringify(String(message||'')),cwd));
+ipcMain.handle('git:stageFile', async (_,cwd,file)=>runGitArgs(['add','--',String(file||'')],cwd));
+ipcMain.handle('git:unstageFile', async (_,cwd,file)=>runGitArgs(['restore','--staged','--',String(file||'')],cwd));
+ipcMain.handle('git:discardFile', async (_,cwd,file)=>runGitArgs(['restore','--worktree','--',String(file||'')],cwd));
+ipcMain.handle('git:branches', async (_,cwd)=>runGitArgs(['branch','--format=%(refname:short)'],cwd));
+ipcMain.handle('git:checkout', async (_,cwd,branch)=>{
+  const name=String(branch||'').trim();
+  if(!name||/[\r\n\0]/.test(name))throw new Error('Rama Git no válida');
+  return runGitArgs(['checkout',name],cwd);
+});
 ipcMain.handle('system:reveal', async (_, p) => { shell.showItemInFolder(p); return true; });
 ipcMain.handle('system:clipboardWrite', async (_, text) => { clipboard.writeText(String(text??'')); return true; });
 ipcMain.handle('system:openExternal', async (_, rawUrl) => {
