@@ -372,8 +372,62 @@ function renderSearch(host){
   };
   input.focus();
 }
-function parseChanges(text){return String(text||'').split(/\r?\n/).filter(Boolean).map(line=>({code:line.slice(0,2).trim()||'M',path:line.slice(3)}));}
-async function renderSCM(host){if(!workspace){host.innerHTML='<div class="view-note">Abre una carpeta para usar Git.</div>';return;}host.innerHTML='<div class="view-note">Cargando cambios...</div>';const r=await window.axiom.gitChanges(workspace.root);if(!r.ok){host.innerHTML='<div class="view-note">Esta carpeta no es un repositorio Git.</div>';return;}const changes=parseChanges(r.stdout);host.innerHTML='<div class="scm-toolbar"><button id="stageAllBtn"><span class="codicon codicon-add"></span> Preparar todo</button></div><div class="commit-box"><input id="commitInput" placeholder="Mensaje de commit"><button id="commitBtn">Commit</button></div><div id="scmFiles"></div>';const list=$('#scmFiles');if(!changes.length)list.innerHTML='<div class="view-note">No hay cambios.</div>';for(const c of changes){const b=document.createElement('button');b.className='scm-file';b.innerHTML=`<span>${escapeHtml(c.path)}</span><b>${escapeHtml(c.code)}</b>`;b.onclick=()=>openFile(join(workspace.root,c.path.replace(/\//g,'\\')));list.appendChild(b);}$('#stageAllBtn').onclick=async()=>{await window.axiom.gitAddAll(workspace.root);logOutput('Git: todos los cambios preparados');renderSCM(host);};$('#commitBtn').onclick=async()=>{const msg=$('#commitInput').value.trim();if(!msg)return;const res=await window.axiom.gitCommit(workspace.root,msg);logOutput(res.stdout||res.stderr||'Git commit');await updateGit();renderSCM(host);};}
+function parseChanges(text){
+  return String(text||'').split(/\r?\n/).filter(Boolean).map(line=>{
+    const x=line[0]||' ',y=line[1]||' ',raw=line.slice(3);
+    const filePath=raw.includes(' -> ')?raw.split(' -> ').pop():raw;
+    return {x,y,code:(x+y).trim()||'M',path:filePath,raw,staged:x!==' '&&x!=='?',unstaged:y!==' ',untracked:x==='?'&&y==='?'};
+  });
+}
+async function renderSCM(host){
+  if(!workspace){host.innerHTML='<div class="view-note">Abre una carpeta para usar Git.</div>';return;}
+  host.innerHTML='<div class="view-note">Cargando cambios...</div>';
+  const [changesResult,branchesResult,statusResult]=await Promise.all([
+    window.axiom.gitChanges(workspace.root),
+    window.axiom.gitBranches(workspace.root),
+    window.axiom.gitStatus(workspace.root)
+  ]);
+  if(!changesResult.ok){host.innerHTML='<div class="view-note">Esta carpeta no es un repositorio Git.</div>';return;}
+  const changes=parseChanges(changesResult.stdout);
+  const branches=branchesResult.ok?String(branchesResult.stdout||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean):[];
+  const first=String(statusResult.stdout||'').split(/\r?\n/)[0];
+  const currentBranch=statusResult.ok?(first.replace(/^##\s*/,'').split('...')[0].trim()||''):'';
+  host.innerHTML='<div class="scm-toolbar"><button id="scmRefreshBtn" title="Actualizar"><span class="codicon codicon-refresh"></span></button><button id="stageAllBtn" title="Preparar todos"><span class="codicon codicon-add"></span></button><select id="scmBranchSelect" title="Cambiar rama"></select></div><div class="commit-box"><input id="commitInput" placeholder="Mensaje de commit"><button id="commitBtn">Commit</button></div><div class="scm-section-title">CAMBIOS <span id="scmChangeCount"></span></div><div id="scmFiles"></div>';
+  const branchSelect=$('#scmBranchSelect');
+  for(const branch of branches){const o=document.createElement('option');o.value=branch;o.textContent=branch;o.selected=branch===currentBranch;branchSelect.appendChild(o);}
+  if(!branches.length){const o=document.createElement('option');o.textContent=currentBranch||'Git';branchSelect.appendChild(o);branchSelect.disabled=true;}
+  branchSelect.onchange=async()=>{const branch=branchSelect.value;if(!branch||branch===currentBranch)return;const res=await window.axiom.gitCheckout(workspace.root,branch);logOutput(res.stdout||res.stderr||('Git checkout '+branch));if(!res.ok)showInfo('Git','<pre>'+escapeHtml(res.stderr||'No se pudo cambiar de rama')+'</pre>');await refreshWorkspace();await updateGit();renderSCM(host);};
+  $('#scmChangeCount').textContent=changes.length?String(changes.length):'';
+  const list=$('#scmFiles');
+  if(!changes.length)list.innerHTML='<div class="view-note">No hay cambios.</div>';
+  for(const change of changes){
+    const row=document.createElement('div');row.className='scm-file-row';
+    const open=document.createElement('button');open.className='scm-file';
+    open.innerHTML=`<span>${escapeHtml(change.path)}</span><b>${escapeHtml(change.code)}</b>`;
+    open.onclick=()=>openFile(join(workspace.root,change.path.replace(/\//g,'\\')));
+    const actions=document.createElement('div');actions.className='scm-file-actions';
+    if(change.staged){
+      const unstage=document.createElement('button');unstage.title='Quitar de preparados';unstage.innerHTML='<span class="codicon codicon-remove"></span>';
+      unstage.onclick=async()=>{const res=await window.axiom.gitUnstageFile(workspace.root,change.path);if(!res.ok)showInfo('Git','<pre>'+escapeHtml(res.stderr||'No se pudo quitar de preparados')+'</pre>');renderSCM(host);};actions.appendChild(unstage);
+    }else{
+      const stage=document.createElement('button');stage.title='Preparar cambios';stage.innerHTML='<span class="codicon codicon-add"></span>';
+      stage.onclick=async()=>{const res=await window.axiom.gitStageFile(workspace.root,change.path);if(!res.ok)showInfo('Git','<pre>'+escapeHtml(res.stderr||'No se pudo preparar')+'</pre>');renderSCM(host);};actions.appendChild(stage);
+    }
+    const discard=document.createElement('button');discard.title=change.untracked?'Eliminar archivo sin seguimiento':'Descartar cambios';discard.innerHTML='<span class="codicon codicon-discard"></span>';
+    discard.onclick=async()=>{
+      if(!confirm((change.untracked?'¿Eliminar ':'¿Descartar los cambios de ')+change.path+'?'))return;
+      let res={ok:true};
+      if(change.untracked){try{await window.axiom.deleteFile(join(workspace.root,change.path.replace(/\//g,'\\')));}catch(e){res={ok:false,stderr:e.message};}}
+      else res=await window.axiom.gitDiscardFile(workspace.root,change.path);
+      if(!res.ok)showInfo('Git','<pre>'+escapeHtml(res.stderr||'No se pudieron descartar los cambios')+'</pre>');
+      await refreshWorkspace();renderSCM(host);
+    };
+    actions.appendChild(discard);row.append(open,actions);list.appendChild(row);
+  }
+  $('#scmRefreshBtn').onclick=()=>renderSCM(host);
+  $('#stageAllBtn').onclick=async()=>{const res=await window.axiom.gitAddAll(workspace.root);logOutput(res.stdout||res.stderr||'Git: todos los cambios preparados');renderSCM(host);};
+  $('#commitBtn').onclick=async()=>{const msg=$('#commitInput').value.trim();if(!msg)return;const res=await window.axiom.gitCommit(workspace.root,msg);logOutput(res.stdout||res.stderr||'Git commit');if(!res.ok)showInfo('Git','<pre>'+escapeHtml(res.stderr||'No se pudo crear el commit')+'</pre>');await updateGit();renderSCM(host);};
+}
 function renderRunView(host){
   if(!runnerInstalled){
     host.innerHTML=`<div class="run-view"><div class="run-icon"><span class="codicon codicon-debug-alt"></span></div><h3>Ejecutar y depurar</h3><p>Instala <b>Runner</b> para activar ejecución universal, detección de runtimes y compilación automática.</p><button id="runnerInstallView"><span class="codicon codicon-extensions"></span> Ver Runner en Extensiones</button></div>`;
