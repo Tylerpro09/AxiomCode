@@ -27,7 +27,8 @@
     "test:extension-network:smoke": "electron scripts/smoke-extension-network.cjs",
     "test:problems:smoke": "electron scripts/smoke-problems.cjs",
     "test:vscode-functions:smoke": "electron scripts/smoke-vscode-functions.cjs",
-    "test:destroyed-window:smoke": "electron scripts/smoke-destroyed-window.cjs"
+    "test:destroyed-window:smoke": "electron scripts/smoke-destroyed-window.cjs",
+    "test:scm:smoke": "electron scripts/smoke-scm.cjs"
   },
   "author": "AxiomCode",
   "license": "MIT",
