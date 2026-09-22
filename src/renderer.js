@@ -2,7 +2,8 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let editor=null,workspace=null,activePath=null,iconManifest=null,paletteMode='commands',paletteItems=[],paletteBuildVersion=0,sideMode='explorer',panelMode='terminal',sidebarVisible=true,scratchInstalled=false,runnerInstalled=false,scratchAssetsLoaded=false,appUpdate=null,updateBusy=false;
 const tabs=new Map(), terminalState={sessions:new Map(),active:null};
 const extensionRuntimes=new Map(), extensionCommands=new Map();
-const outputLog=[], debugLog=[];let autoSaveTimer=null,explorerClipboard=null,explorerSelection=null;
+const outputLog=[], debugLog=[], recentlyClosedEditors=[], navigationBack=[], navigationForward=[];
+let autoSaveTimer=null,explorerClipboard=null,explorerSelection=null,suppressNavigationHistory=false;
 async function ensureScratchAssetsLoaded(){
   if(scratchAssetsLoaded&&window.AxiomScratch)return true;
   if(!scratchInstalled)return false;
@@ -306,6 +307,86 @@ function normalizePinnedTabs(){
   const pinned=entries.filter(([,t])=>t.pinned),normal=entries.filter(([,t])=>!t.pinned);
   rebuildTabOrder([...pinned,...normal]);
 }
+function currentEditorLocation(){
+  if(!activePath||!tabs.has(activePath))return null;
+  const pos=editor?.getPosition?.()||{lineNumber:1,column:1};
+  return {path:activePath,lineNumber:pos.lineNumber||1,column:pos.column||1};
+}
+function pushNavigation(stack,location){
+  if(!location?.path)return;
+  const last=stack[stack.length-1];
+  if(last&&last.path===location.path&&last.lineNumber===location.lineNumber&&last.column===location.column)return;
+  stack.push(location);
+  if(stack.length>100)stack.shift();
+}
+function rememberNavigation(nextPath){
+  if(suppressNavigationHistory||!activePath||activePath===nextPath||!tabs.has(activePath))return;
+  pushNavigation(navigationBack,currentEditorLocation());
+  navigationForward.length=0;
+}
+async function restoreEditorLocation(location){
+  if(!location?.path)return false;
+  suppressNavigationHistory=true;
+  try{
+    await openFile(location.path);
+    if(activePath!==location.path||!tabs.has(location.path))return false;
+    const model=editor?.getModel();
+    if(model){
+      const maxLine=Math.max(1,model.getLineCount());
+      const line=Math.min(maxLine,Math.max(1,Number(location.lineNumber)||1));
+      const maxColumn=Math.max(1,model.getLineMaxColumn(line));
+      const column=Math.min(maxColumn,Math.max(1,Number(location.column)||1));
+      editor.setPosition({lineNumber:line,column});
+      editor.revealPositionInCenter({lineNumber:line,column});
+      editor.focus();
+    }
+    return true;
+  }finally{suppressNavigationHistory=false;}
+}
+async function navigateBack(){
+  if(!navigationBack.length)return setStatus('No hay ubicación anterior');
+  const current=currentEditorLocation(),target=navigationBack.pop();
+  if(current)pushNavigation(navigationForward,current);
+  if(!(await restoreEditorLocation(target))){
+    navigationForward.pop();
+    return setStatus('No se pudo abrir la ubicación anterior');
+  }
+  setStatus('Atrás: '+relativeToWorkspace(target.path));
+}
+async function navigateForward(){
+  if(!navigationForward.length)return setStatus('No hay ubicación siguiente');
+  const current=currentEditorLocation(),target=navigationForward.pop();
+  if(current)pushNavigation(navigationBack,current);
+  if(!(await restoreEditorLocation(target))){
+    navigationBack.pop();
+    return setStatus('No se pudo abrir la ubicación siguiente');
+  }
+  setStatus('Adelante: '+relativeToWorkspace(target.path));
+}
+function cycleEditor(step=1){
+  const keys=[...tabs.keys()];
+  if(keys.length<2)return;
+  const index=Math.max(0,keys.indexOf(activePath));
+  const next=keys[(index+step+keys.length)%keys.length];
+  if(next)activate(next);
+}
+async function reopenClosedEditor(){
+  while(recentlyClosedEditors.length){
+    const item=recentlyClosedEditors.pop();
+    if(!item?.path)continue;
+    await openFile(item.path);
+    const tab=tabs.get(item.path);
+    if(tab){
+      tab.pinned=Boolean(item.pinned);
+      normalizePinnedTabs();
+      renderTabs();
+      setStatus('Reabierto: '+relativeToWorkspace(item.path));
+      return true;
+    }
+  }
+  setStatus('No hay editores cerrados para reabrir');
+  return false;
+}
 function togglePinTab(p){
   const tab=tabs.get(p);if(!tab)return;
   tab.pinned=!tab.pinned;
@@ -377,8 +458,8 @@ function renderTabs(){
 }
 async function openFile(p,line,column=1){if(/\.(axiomscratch|sb3|sb2|sb)$/i.test(p))return openScratchMode(p);try{if(!tabs.has(p)){const r=await window.axiom.readFile(p);tabs.set(p,{model:monaco.editor.createModel(r.content,fileLang(p),monaco.Uri.file(p)),dirty:false,pinned:false});}activate(p);if(line){const model=editor.getModel(),safeLine=Math.max(1,Math.min(model.getLineCount(),Number(line)||1)),safeColumn=Math.max(1,Math.min(model.getLineMaxColumn(safeLine),Number(column)||1));editor.revealPositionInCenter({lineNumber:safeLine,column:safeColumn});editor.setPosition({lineNumber:safeLine,column:safeColumn});}}catch(e){setStatus('No se pudo abrir: '+e.message);logOutput(e.message);}}
 async function openFiles(){const paths=await window.axiom.openFiles(workspace?.root);for(const p of paths||[])await openFile(p);}
-function activate(p){window.AxiomScratch?.hide();const t=tabs.get(p);if(!t)return;activePath=p;editor.setModel(t.model);showCode(true);renderTabs();$('#language').textContent=fileLang(p);renderBreadcrumbs();editor.focus();setStatus(p);if(sideMode==='explorer')renderSideView();}
-function closeTab(p){const t=tabs.get(p);if(!t)return;if(t.dirty&&!confirm(`Hay cambios sin guardar en ${basename(p)}. ¿Cerrar?`))return;t.model.dispose();tabs.delete(p);if(activePath===p){activePath=[...tabs.keys()].pop()||null;if(activePath)activate(activePath);else{showCode(false);renderBreadcrumbs();}}renderTabs();}
+function activate(p){window.AxiomScratch?.hide();const t=tabs.get(p);if(!t)return;rememberNavigation(p);activePath=p;editor.setModel(t.model);showCode(true);renderTabs();$('#language').textContent=fileLang(p);renderBreadcrumbs();editor.focus();setStatus(p);if(sideMode==='explorer')renderSideView();}
+function closeTab(p){const t=tabs.get(p);if(!t)return false;if(t.dirty&&!confirm(`Hay cambios sin guardar en ${basename(p)}. ¿Cerrar?`))return false;recentlyClosedEditors.push({path:p,pinned:Boolean(t.pinned)});if(recentlyClosedEditors.length>50)recentlyClosedEditors.shift();const wasActive=activePath===p;t.model.dispose();tabs.delete(p);if(wasActive){const next=[...tabs.keys()].pop()||null;activePath=null;if(next){suppressNavigationHistory=true;try{activate(next);}finally{suppressNavigationHistory=false;}}else{showCode(false);renderBreadcrumbs();}}renderTabs();return true;}
 async function saveActive(){if(window.AxiomScratch?.visible)return window.AxiomScratch.save();if(!activePath)return;const t=tabs.get(activePath);await window.axiom.writeFile(activePath,t.model.getValue());t.dirty=false;renderTabs();setStatus('Guardado '+basename(activePath));logOutput('Guardado '+activePath);if(activePath===window.AxiomPreferences?.state?.settingsPath)await window.AxiomPreferences.reloadFromDisk();}
 async function saveAll(){if(window.AxiomScratch?.visible)await window.AxiomScratch.save();for(const [p,t] of tabs){if(t.dirty){await window.axiom.writeFile(p,t.model.getValue());t.dirty=false;}}renderTabs();setStatus('Todos los archivos guardados');}
 function useWorkspace(w,restored=false){if(!w)return;workspace=w;$('#workspaceName').textContent=basename(w.root).toUpperCase();renderBreadcrumbs();sideMode='explorer';renderSideView();setStatus((restored?'Proyecto restaurado: ':'Proyecto: ')+w.root);logOutput((restored?'Carpeta restaurada: ':'Carpeta abierta: ')+w.root);updateGit();window.AxiomPreferences?.onWorkspaceChanged();}
@@ -1018,8 +1099,8 @@ async function runActiveFile(){
   await newTerminal('powershell');debugLog.push('Ejecutando '+activePath);await execPersistentTerminal(cmd);setStatus('Ejecutando '+basename(activePath));
 }
 const commands=[
-{name:'Archivo: Nuevo archivo',hint:'',run:createNewFile},{name:'Archivo: Abrir archivo...',hint:'Ctrl+O',run:openFiles},{name:'Archivo: Abrir carpeta...',hint:'Ctrl+K Ctrl+O',run:openWorkspace},{name:'Archivo: Guardar',hint:'Ctrl+S',run:saveActive},{name:'Archivo: Guardar todo',hint:'Ctrl+Shift+S',run:saveAll},{name:'Archivo: Cerrar editor',hint:'Ctrl+W',run:()=>activePath&&closeTab(activePath)},
-{name:'Editor: Fijar/desfijar pestaña',hint:'',run:()=>activePath&&togglePinTab(activePath)},{name:'Editor: Cerrar otros editores',hint:'',run:()=>closeOtherTabs()},{name:'Editor: Cerrar editores a la derecha',hint:'',run:()=>closeTabsRight()},{name:'Editor: Cerrar editores no fijados',hint:'',run:closeUnpinnedTabs},
+{name:'Archivo: Nuevo archivo',hint:'',run:createNewFile},{name:'Archivo: Abrir archivo...',hint:'Ctrl+O',run:openFiles},{name:'Archivo: Abrir carpeta...',hint:'Ctrl+K Ctrl+O',run:openWorkspace},{name:'Archivo: Guardar',hint:'Ctrl+S',run:saveActive},{name:'Archivo: Guardar todo',hint:'Ctrl+Shift+S',run:saveAll},{name:'Archivo: Cerrar editor',hint:'Ctrl+W',run:()=>activePath&&closeTab(activePath)},{name:'Archivo: Reabrir editor cerrado',hint:'Ctrl+Shift+T',run:reopenClosedEditor},
+{name:'Editor: Fijar/desfijar pestaña',hint:'',run:()=>activePath&&togglePinTab(activePath)},{name:'Editor: Siguiente editor',hint:'Ctrl+Tab',run:()=>cycleEditor(1)},{name:'Editor: Editor anterior',hint:'Ctrl+Shift+Tab',run:()=>cycleEditor(-1)},{name:'Editor: Cerrar otros editores',hint:'',run:()=>closeOtherTabs()},{name:'Editor: Cerrar editores a la derecha',hint:'',run:()=>closeTabsRight()},{name:'Editor: Cerrar editores no fijados',hint:'',run:closeUnpinnedTabs},{name:'Navegación: Atrás',hint:'Alt+Left',run:navigateBack},{name:'Navegación: Adelante',hint:'Alt+Right',run:navigateForward},
 {name:'Scratch: Abrir editor de bloques',hint:'',run:()=>openScratchMode()},{name:'Ver: Explorador',hint:'Ctrl+Shift+E',run:()=>setSideMode('explorer')},{name:'Ver: Buscar',hint:'Ctrl+Shift+F',run:()=>setSideMode('search')},{name:'Ver: Control de código fuente',hint:'Ctrl+Shift+G',run:()=>setSideMode('scm')},{name:'Ver: Esquema (Outline)',hint:'',run:()=>setSideMode('outline')},{name:'Ver: Extensiones',hint:'Ctrl+Shift+X',run:()=>setSideMode('extensions')},{name:'Ver: Alternar barra lateral',hint:'Ctrl+B',run:()=>toggleSidebar()},{name:'Ver: Alternar panel',hint:'Ctrl+J',run:()=>togglePanel()},
 {name:'Ejecutar: Archivo activo',hint:'F5',run:runActiveFile},{name:'Runner: Abrir',hint:'',run:openRunnerMode},{name:'Runner: Detener ejecución',hint:'',run:stopRunner},{name:'Terminal: Nueva PowerShell',hint:'',run:()=>newTerminal('powershell')},{name:'Terminal: Nueva CMD',hint:'',run:()=>newTerminal('cmd')},{name:'Terminal: Cerrar activa',hint:'',run:closeActiveTerminal},{name:'Git: Actualizar estado',hint:'',run:updateGit},{name:'Archivo: Revelar en Explorador',hint:'',run:()=>activePath&&window.axiom.reveal(activePath)},
 {name:'Proyecto: Ir a símbolo en el espacio de trabajo',hint:'Ctrl+T',run:()=>showPalette('symbols')},{name:'Editor: Formatear documento',hint:'Shift+Alt+F',run:()=>runEditorAction('editor.action.formatDocument')},{name:'Editor: Formatear selección',hint:'',run:()=>runEditorAction('editor.action.formatSelection')},{name:'Editor: Ir a línea',hint:'Ctrl+G',run:()=>runEditorAction('editor.action.gotoLine')},{name:'Editor: Ir a definición',hint:'F12',run:goToDefinition},{name:'Editor: Ver definición',hint:'Alt+F12',run:peekDefinition},{name:'Editor: Ir a referencias',hint:'Shift+F12',run:showReferences},{name:'Editor: Cambiar nombre de símbolo',hint:'F2',run:()=>runEditorAction('editor.action.rename')},{name:'Editor: Acción rápida',hint:'Ctrl+.',run:()=>runEditorAction('editor.action.quickFix')},{name:'Editor: Mostrar sugerencias',hint:'Ctrl+Espacio',run:()=>runEditorAction('editor.action.triggerSuggest')},{name:'Editor: Ir a símbolo...',hint:'Ctrl+Shift+O',run:()=>runEditorAction('editor.action.quickOutline')},{name:'Editor: Siguiente problema',hint:'F8',run:()=>runEditorAction('editor.action.marker.next')},{name:'Editor: Problema anterior',hint:'Shift+F8',run:()=>runEditorAction('editor.action.marker.prev')},{name:'Editor: Buscar',hint:'Ctrl+F',run:()=>runEditorAction('actions.find')},{name:'Editor: Reemplazar',hint:'Ctrl+H',run:()=>runEditorAction('editor.action.startFindReplaceAction')},{name:'Proyecto: Buscar y reemplazar',hint:'Ctrl+Shift+H',run:()=>{setSideMode('search');setTimeout(()=>$('#sideReplaceInput')?.focus(),30);}},{name:'Archivo: Abrir reciente...',hint:'Ctrl+R',run:showRecentWorkspaces},{name:'Preferencias: Settings',hint:'Ctrl+,',run:()=>window.AxiomPreferences?.open('settings')},{name:'Preferencias: Keyboard Shortcuts',hint:'Ctrl+K Ctrl+S',run:()=>window.AxiomPreferences?.open('keybindings')},{name:'Preferencias: Profiles',hint:'',run:()=>window.AxiomPreferences?.open('profiles')},{name:'Preferencias: Backup and Sync Settings',hint:'',run:()=>window.AxiomPreferences?.open('backup')},{name:'Ayuda: Buscar actualizaciones',hint:'',run:()=>checkForAppUpdates(true)}
@@ -1090,11 +1171,11 @@ async function buildPalette(q){
   renderPaletteItems(box);
 }
 const menuModel={
-file:[['Nuevo archivo',createNewFile],['Abrir archivo...',openFiles],['Abrir carpeta...',openWorkspace],['Abrir reciente...',showRecentWorkspaces],['Guardar',saveActive],['Guardar todo',saveAll],['Cerrar editor',()=>activePath&&closeTab(activePath)]],
+file:[['Nuevo archivo',createNewFile],['Abrir archivo...',openFiles],['Abrir carpeta...',openWorkspace],['Abrir reciente...',showRecentWorkspaces],['Guardar',saveActive],['Guardar todo',saveAll],['Cerrar editor',()=>activePath&&closeTab(activePath)],['Reabrir editor cerrado',reopenClosedEditor]],
 edit:[['Deshacer',()=>editor?.trigger('menu','undo')],['Rehacer',()=>editor?.trigger('menu','redo')],['Buscar',()=>runEditorAction('actions.find')],['Reemplazar',()=>runEditorAction('editor.action.startFindReplaceAction')],['Buscar y reemplazar en archivos',()=>{setSideMode('search');setTimeout(()=>$('#sideReplaceInput')?.focus(),30);}],['Acción rápida',()=>runEditorAction('editor.action.quickFix')],['Cambiar nombre de símbolo',()=>runEditorAction('editor.action.rename')],['Formatear documento',()=>runEditorAction('editor.action.formatDocument')]],
 selection:[['Seleccionar todo',()=>editor?.trigger('menu','selectAll')]],
 view:[['Modo Scratch (bloques)',()=>openScratchMode()],['Explorador',()=>setSideMode('explorer')],['Buscar',()=>setSideMode('search')],['Control de código fuente',()=>setSideMode('scm')],['Ejecutar y depurar',()=>setSideMode('run')],['Esquema (Outline)',()=>setSideMode('outline')],['Extensiones',()=>setSideMode('extensions')],['Alternar barra lateral',()=>toggleSidebar()],['Alternar panel',()=>togglePanel()],['Paleta de comandos',()=>showPalette('commands')]],
-go:[['Ir al archivo...',()=>showPalette('files')],['Ir a símbolo del proyecto...',()=>showPalette('symbols')],['Ir a línea...',()=>runEditorAction('editor.action.gotoLine')],['Ir a símbolo...',()=>runEditorAction('editor.action.quickOutline')],['Ir a definición',goToDefinition],['Ver definición',peekDefinition],['Ir a referencias',showReferences],['Siguiente problema',()=>runEditorAction('editor.action.marker.next')],['Problema anterior',()=>runEditorAction('editor.action.marker.prev')]],
+go:[['Atrás',navigateBack],['Adelante',navigateForward],['Ir al archivo...',()=>showPalette('files')],['Ir a símbolo del proyecto...',()=>showPalette('symbols')],['Ir a línea...',()=>runEditorAction('editor.action.gotoLine')],['Ir a símbolo...',()=>runEditorAction('editor.action.quickOutline')],['Ir a definición',goToDefinition],['Ver definición',peekDefinition],['Ir a referencias',showReferences],['Siguiente problema',()=>runEditorAction('editor.action.marker.next')],['Problema anterior',()=>runEditorAction('editor.action.marker.prev')]],
 run:[['Ejecutar archivo activo',runActiveFile],['Abrir Runner',openRunnerMode],['Detener ejecución',stopRunner],['Abrir vista Ejecutar y depurar',()=>setSideMode('run')]],
 terminal:[['Nueva PowerShell',()=>newTerminal('powershell')],['Nuevo Command Prompt',()=>newTerminal('cmd')],['Cerrar terminal activa',closeActiveTerminal],['Mostrar/ocultar panel',()=>togglePanel()]],
 help:[['Buscar actualizaciones...',()=>checkForAppUpdates(true)],['Acerca de AxiomCode',async()=>{const i=await window.axiom.appInfo();showInfo('AxiomCode',`<p>Versión ${escapeHtml(i.version)}</p><p>Electron ${escapeHtml(i.electron)} · Node ${escapeHtml(i.node)}</p><p>Editor inspirado en la arquitectura visual de VS Code.</p>`);}]]};
@@ -1112,6 +1193,11 @@ function runPreferenceCommand(id){
     'workbench.action.quickOpen':()=>showPalette('files'),
     'workbench.action.showAllSymbols':()=>showPalette('symbols'),
     'workbench.action.openRecent':showRecentWorkspaces,
+    'workbench.action.reopenClosedEditor':reopenClosedEditor,
+    'workbench.action.navigateBack':navigateBack,
+    'workbench.action.navigateForward':navigateForward,
+    'workbench.action.nextEditor':()=>cycleEditor(1),
+    'workbench.action.previousEditor':()=>cycleEditor(-1),
     'workbench.action.files.openFile':openFiles,
     'workbench.action.files.save':saveActive,
     'workbench.view.explorer':()=>setSideMode('explorer'),
@@ -1126,7 +1212,7 @@ function runPreferenceCommand(id){
   };
   actions[id]?.();
 }
-function setupShortcuts(){window.addEventListener('keydown',e=>{if(window.AxiomPreferences?.handleKeydown(e))return;const ctrl=e.ctrlKey||e.metaKey,k=e.key.toLowerCase();if(ctrl&&k==='s'&&!e.shiftKey){e.preventDefault();saveActive();}else if(ctrl&&e.shiftKey&&k==='s'){e.preventDefault();saveAll();}else if(ctrl&&k==='o'){e.preventDefault();openFiles();}else if(ctrl&&k==='w'){e.preventDefault();if(activePath)closeTab(activePath);}else if(ctrl&&!e.shiftKey&&k==='p'){e.preventDefault();showPalette('files');}else if(ctrl&&!e.shiftKey&&k==='t'){e.preventDefault();showPalette('symbols');}else if(ctrl&&e.shiftKey&&k==='p'){e.preventDefault();showPalette('commands');}else if(ctrl&&e.shiftKey&&k==='e'){e.preventDefault();setSideMode('explorer');}else if(ctrl&&e.shiftKey&&k==='f'){e.preventDefault();setSideMode('search');}else if(ctrl&&e.shiftKey&&k==='h'){e.preventDefault();setSideMode('search');setTimeout(()=>$('#sideReplaceInput')?.focus(),30);}else if(ctrl&&!e.shiftKey&&k==='r'){e.preventDefault();showRecentWorkspaces();}else if(ctrl&&e.shiftKey&&k==='o'){e.preventDefault();runEditorAction('editor.action.quickOutline');}else if(ctrl&&e.shiftKey&&k==='g'){e.preventDefault();setSideMode('scm');}else if(ctrl&&e.shiftKey&&k==='x'){e.preventDefault();setSideMode('extensions');}else if(ctrl&&k==='b'){e.preventDefault();toggleSidebar();}else if(ctrl&&k==='j'){e.preventDefault();togglePanel();}else if(ctrl&&e.key==='`'){e.preventDefault();setPanelMode('terminal');if(!terminalState.sessions.size)newTerminal();}else if(e.key==='F2'){e.preventDefault();runEditorAction('editor.action.rename');}else if(e.key==='F8'&&!e.shiftKey){e.preventDefault();runEditorAction('editor.action.marker.next');}else if(e.key==='F8'&&e.shiftKey){e.preventDefault();runEditorAction('editor.action.marker.prev');}else if(e.key==='F12'&&!e.shiftKey&&!e.altKey){e.preventDefault();goToDefinition();}else if(e.key==='F12'&&e.shiftKey){e.preventDefault();showReferences();}else if(e.key==='F12'&&e.altKey){e.preventDefault();peekDefinition();}else if(e.key==='F5'){e.preventDefault();runActiveFile();}else if(e.key==='Escape'){hidePalette();closeMenus();}});}
+function setupShortcuts(){window.addEventListener('keydown',e=>{if(window.AxiomPreferences?.handleKeydown(e))return;const ctrl=e.ctrlKey||e.metaKey,k=e.key.toLowerCase();if(ctrl&&e.shiftKey&&k==='t'){e.preventDefault();reopenClosedEditor();}else if(ctrl&&k==='tab'){e.preventDefault();cycleEditor(e.shiftKey?-1:1);}else if(e.altKey&&!ctrl&&!e.shiftKey&&e.key==='ArrowLeft'){e.preventDefault();navigateBack();}else if(e.altKey&&!ctrl&&!e.shiftKey&&e.key==='ArrowRight'){e.preventDefault();navigateForward();}else if(ctrl&&k==='s'&&!e.shiftKey){e.preventDefault();saveActive();}else if(ctrl&&e.shiftKey&&k==='s'){e.preventDefault();saveAll();}else if(ctrl&&k==='o'){e.preventDefault();openFiles();}else if(ctrl&&k==='w'){e.preventDefault();if(activePath)closeTab(activePath);}else if(ctrl&&!e.shiftKey&&k==='p'){e.preventDefault();showPalette('files');}else if(ctrl&&!e.shiftKey&&k==='t'){e.preventDefault();showPalette('symbols');}else if(ctrl&&e.shiftKey&&k==='p'){e.preventDefault();showPalette('commands');}else if(ctrl&&e.shiftKey&&k==='e'){e.preventDefault();setSideMode('explorer');}else if(ctrl&&e.shiftKey&&k==='f'){e.preventDefault();setSideMode('search');}else if(ctrl&&e.shiftKey&&k==='h'){e.preventDefault();setSideMode('search');setTimeout(()=>$('#sideReplaceInput')?.focus(),30);}else if(ctrl&&!e.shiftKey&&k==='r'){e.preventDefault();showRecentWorkspaces();}else if(ctrl&&e.shiftKey&&k==='o'){e.preventDefault();runEditorAction('editor.action.quickOutline');}else if(ctrl&&e.shiftKey&&k==='g'){e.preventDefault();setSideMode('scm');}else if(ctrl&&e.shiftKey&&k==='x'){e.preventDefault();setSideMode('extensions');}else if(ctrl&&k==='b'){e.preventDefault();toggleSidebar();}else if(ctrl&&k==='j'){e.preventDefault();togglePanel();}else if(ctrl&&e.key==='`'){e.preventDefault();setPanelMode('terminal');if(!terminalState.sessions.size)newTerminal();}else if(e.key==='F2'){e.preventDefault();runEditorAction('editor.action.rename');}else if(e.key==='F8'&&!e.shiftKey){e.preventDefault();runEditorAction('editor.action.marker.next');}else if(e.key==='F8'&&e.shiftKey){e.preventDefault();runEditorAction('editor.action.marker.prev');}else if(e.key==='F12'&&!e.shiftKey&&!e.altKey){e.preventDefault();goToDefinition();}else if(e.key==='F12'&&e.shiftKey){e.preventDefault();showReferences();}else if(e.key==='F12'&&e.altKey){e.preventDefault();peekDefinition();}else if(e.key==='F5'){e.preventDefault();runActiveFile();}else if(e.key==='Escape'){hidePalette();closeMenus();}});}
 async function setupSettings(){
   return window.AxiomPreferences?.init({
     getEditor:()=>editor,

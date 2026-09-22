@@ -61,6 +61,21 @@ app.whenReady().then(async()=>{try{
     reorderTab(betaPath,alphaPath);
     const reordered=[...tabs.keys()].indexOf(betaPath)<[...tabs.keys()].indexOf(alphaPath);
     activate(alphaPath);
+    navigationBack.length=0;navigationForward.length=0;
+    editor.setPosition({lineNumber:1,column:2});
+    activate(betaPath);
+    editor.setPosition({lineNumber:2,column:3});
+    await navigateBack();
+    const navigationBackOk=activePath===alphaPath&&editor.getPosition()?.lineNumber===1;
+    await navigateForward();
+    const navigationForwardOk=activePath===betaPath&&editor.getPosition()?.lineNumber===2;
+    const cycleFrom=activePath;cycleEditor(1);
+    const cycleOk=activePath!==cycleFrom;
+    const closedPath=activePath;
+    const closeOk=closeTab(closedPath)&&!tabs.has(closedPath);
+    await reopenClosedEditor();
+    const reopenOk=tabs.has(closedPath)&&activePath===closedPath;
+    activate(alphaPath);
     setSideMode('search');
     await new Promise(r=>setTimeout(r,100));
     const searchReplaceUi=Boolean(document.querySelector('#sideReplaceInput')&&document.querySelector('#replaceAllBtn')&&document.querySelector('#searchCaseBtn')&&document.querySelector('#searchWordBtn')&&document.querySelector('#searchRegexBtn'));
@@ -100,6 +115,11 @@ app.whenReady().then(async()=>{try{
       copiedFileOk:/xar/i.test(copiedFile.content),
       pinned,
       reordered,
+      navigationBackOk,
+      navigationForwardOk,
+      cycleOk,
+      closeOk,
+      reopenOk,
       recent:(await window.axiom.recentWorkspaces()).includes(root),
       breadcrumbs:[...document.querySelectorAll('.breadcrumb-item')].map(x=>x.textContent.trim()),
       searchReplaceUi,
@@ -111,8 +131,9 @@ app.whenReady().then(async()=>{try{
       commandCoverage:[
         'Editor: Ir a definición','Editor: Ver definición','Editor: Ir a referencias',
         'Editor: Cambiar nombre de símbolo','Editor: Acción rápida','Editor: Ir a símbolo...',
-        'Proyecto: Buscar y reemplazar','Proyecto: Ir a símbolo en el espacio de trabajo','Archivo: Abrir reciente...',
-        'Editor: Fijar/desfijar pestaña','Editor: Cerrar otros editores','Editor: Cerrar editores a la derecha'
+        'Proyecto: Buscar y reemplazar','Proyecto: Ir a símbolo en el espacio de trabajo','Archivo: Abrir reciente...','Archivo: Reabrir editor cerrado',
+        'Editor: Fijar/desfijar pestaña','Editor: Siguiente editor','Editor: Editor anterior',
+        'Editor: Cerrar otros editores','Editor: Cerrar editores a la derecha','Navegación: Atrás','Navegación: Adelante'
       ].every(name=>commandNames.includes(name))
     };
   })()`);
@@ -128,6 +149,9 @@ app.whenReady().then(async()=>{try{
   if(result.regexReplaced.replacements!==3||result.xars!==3)throw Error('Regex replace with capture groups failed');
   if(!result.pasted||!result.copiedFileOk)throw Error('Explorer copy/paste failed');
   if(!result.pinned||!result.reordered)throw Error('Pinned/reordered tabs failed');
+  if(!result.navigationBackOk||!result.navigationForwardOk)throw Error('Editor navigation history failed');
+  if(!result.cycleOk)throw Error('Editor cycling failed');
+  if(!result.closeOk||!result.reopenOk)throw Error('Reopen closed editor failed');
   if(!result.recent)throw Error('Recent workspace integration failed');
   if(result.breadcrumbs.length<2)throw Error('Breadcrumbs did not render path segments');
   if(!result.searchReplaceUi)throw Error('Search/replace UI missing');
@@ -137,6 +161,6 @@ app.whenReady().then(async()=>{try{
   if(!result.peekVisible)throw Error('Peek definition preview failed');
   if(!result.outlineRows?.some(x=>/alphaSymbol/.test(x)))throw Error('Outline view failed');
   if(!result.commandCoverage)throw Error('Command palette coverage missing');
-  log('PASS Quick Open line/column, workspace symbols, search/replace regex/whole-word, Explorer copy/paste, pinned/reordered tabs, recent workspaces, breadcrumbs, editor navigation/actions');
+  log('PASS Quick Open line/column, workspace symbols, search/replace, Explorer copy/paste, pinned/reordered tabs, back/forward history, cycling, reopen closed editor, recent workspaces, breadcrumbs, editor navigation/actions');
   finish(0);
 }catch(error){log(error.stack||error);finish(1)}});
