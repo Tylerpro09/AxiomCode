@@ -5,7 +5,7 @@
 })(typeof window!=='undefined'?window:null,function(){
   'use strict';
 
-  const VERSION='1.2.0';
+  const VERSION='1.3.0';
   const MAX_MODEL_BYTES=512*1024;
   const MAX_TOTAL_BYTES=6*1024*1024;
   const MAX_CONTEXTS=32000;
@@ -41,6 +41,8 @@
     'poetry.lock','pipfile.lock','bun.lock','bun.lockb'
   ]);
   const GENERATED_FILE_RE=/(?:^|[._-])(?:min|bundle|generated|vendor)(?:[._-]|$)|\.map$/i;
+  const VICTORS_API_BASE='https://api.victors.qzz.io/v1';
+  const VICTORS_DEFAULT_MODEL='auto:coding';
 
   const TEMPLATES={
     javascript:[
@@ -250,6 +252,156 @@
     if(language==='sql')return s.startsWith('--');
     if(['html','xml'].includes(language))return s.startsWith('<!--');
     return s.startsWith('//')||s.startsWith('/*')||s.startsWith('*');
+  }
+
+
+  function safeHeader(response,name){
+    try{return response?.headers?.get?.(name)??null;}catch{return null;}
+  }
+  function makeUniqueRequestId(){
+    const cryptoApi=typeof crypto!=='undefined'?crypto:null;
+    if(cryptoApi?.randomUUID)return cryptoApi.randomUUID();
+    if(cryptoApi?.getRandomValues){
+      const bytes=new Uint8Array(16);
+      cryptoApi.getRandomValues(bytes);
+      bytes[6]=(bytes[6]&0x0f)|0x40;
+      bytes[8]=(bytes[8]&0x3f)|0x80;
+      const hex=[...bytes].map(x=>x.toString(16).padStart(2,'0')).join('');
+      return hex.slice(0,8)+'-'+hex.slice(8,12)+'-'+hex.slice(12,16)+'-'+hex.slice(16,20)+'-'+hex.slice(20);
+    }
+    throw new Error('No se pudo generar un X-Request-ID seguro');
+  }
+  function victorsError(status,message,code,diagnostic){
+    const error=new Error(message);
+    error.status=status;
+    error.code=code;
+    error.diagnostic=diagnostic||null;
+    return error;
+  }
+  function parseRateWaitMs(response){
+    const retryAfter=safeHeader(response,'Retry-After');
+    if(retryAfter){
+      const seconds=Number(retryAfter);
+      if(Number.isFinite(seconds)&&seconds>=0)return Math.ceil(seconds*1000);
+      const when=Date.parse(retryAfter);
+      if(Number.isFinite(when))return Math.max(0,when-Date.now());
+    }
+    const reset=safeHeader(response,'X-RateLimit-Reset');
+    if(reset){
+      const numeric=Number(reset);
+      if(Number.isFinite(numeric)){
+        const when=numeric>1e12?numeric:numeric*1000;
+        return Math.max(0,when-Date.now());
+      }
+      const parsed=Date.parse(reset);
+      if(Number.isFinite(parsed))return Math.max(0,parsed-Date.now());
+    }
+    return 1000;
+  }
+  function diagnosticFromResponse(response,body,requestedModel,requestId){
+    const usage=body?.usage&&typeof body.usage==='object'?{
+      prompt_tokens:Number.isFinite(Number(body.usage.prompt_tokens))?Number(body.usage.prompt_tokens):null,
+      completion_tokens:Number.isFinite(Number(body.usage.completion_tokens))?Number(body.usage.completion_tokens):null,
+      total_tokens:Number.isFinite(Number(body.usage.total_tokens))?Number(body.usage.total_tokens):null
+    }:{prompt_tokens:null,completion_tokens:null,total_tokens:null};
+    return {
+      model:body?.model||requestedModel||null,
+      status:Number(response?.status)||null,
+      responseTimeMs:safeHeader(response,'X-Response-Time-Ms'),
+      rateLimit:safeHeader(response,'X-RateLimit-Limit'),
+      remaining:safeHeader(response,'X-RateLimit-Remaining'),
+      reset:safeHeader(response,'X-RateLimit-Reset'),
+      policy:safeHeader(response,'X-RateLimit-Policy'),
+      localIntervalSeconds:safeHeader(response,'X-Local-Request-Interval-Seconds'),
+      requestId:safeHeader(response,'X-Request-ID')||requestId||null,
+      usage
+    };
+  }
+  class VictorsAIClient{
+    constructor(options={}){
+      this.baseUrl=String(options.baseUrl||VICTORS_API_BASE).replace(/\/+$/,'');
+      this.fetchFn=options.fetchFn||((...args)=>fetch(...args));
+      this.keyProvider=options.keyProvider||(()=>null);
+      this.uuidFn=options.uuidFn||makeUniqueRequestId;
+      this.sleepFn=options.sleepFn||(ms=>new Promise(resolve=>setTimeout(resolve,ms)));
+      this.lastDiagnostic=null;
+      this.lastModels=[];
+    }
+    key(){
+      const value=String(this.keyProvider?.()||'').trim();
+      if(!value)throw victorsError(null,'Configura la API key de Victorsia Free primero.','NO_API_KEY',null);
+      return value;
+    }
+    async request(path,options={},retry429=true){
+      const requestId=this.uuidFn();
+      const key=this.key();
+      const headers={
+        'Authorization':'Bearer '+key,
+        'X-Request-ID':requestId,
+        ...(options.body?{'Content-Type':'application/json'}:{}),
+        ...(options.headers||{})
+      };
+      let response;
+      try{
+        response=await this.fetchFn(this.baseUrl+path,{...options,headers});
+      }catch(error){
+        throw victorsError(null,'No se pudo conectar con Victorsia Free: '+String(error?.message||error),'NETWORK',null);
+      }
+      let body=null;
+      try{body=await response.json();}catch{}
+      const diagnostic=diagnosticFromResponse(response,body,options.requestedModel,requestId);
+      this.lastDiagnostic=diagnostic;
+      if(response.status===429&&retry429){
+        const waitMs=Math.min(60000,Math.max(250,parseRateWaitMs(response)));
+        await this.sleepFn(waitMs);
+        return this.request(path,options,false);
+      }
+      if(response.status===401)throw victorsError(401,'La API key fue rechazada. Revisa la API key de Victorsia Free.','AUTH',diagnostic);
+      if(response.status===503)throw victorsError(503,'Victorsia Free está offline temporalmente.','PROVIDER_OFFLINE',diagnostic);
+      if(!response.ok)throw victorsError(response.status,'Victorsia Free respondió con HTTP '+response.status+'.','HTTP',diagnostic);
+      return {body,diagnostic};
+    }
+    async models(){
+      const {body,diagnostic}=await this.request('/models',{method:'GET'});
+      const models=(body?.data||[]).map(item=>String(item?.id||'')).filter(Boolean);
+      this.lastModels=models;
+      return {models,diagnostic};
+    }
+    async complete({model,messages,temperature=0.2,maxTokens=512}){
+      if(!model)throw new Error('No hay modelo de IA seleccionado');
+      const payload={
+        model:String(model),
+        messages:Array.isArray(messages)?messages:[],
+        temperature:Number(temperature),
+        max_tokens:Math.max(1,Math.min(4096,Number(maxTokens)||512))
+      };
+      const {body,diagnostic}=await this.request('/chat/completions',{
+        method:'POST',
+        body:JSON.stringify(payload),
+        requestedModel:model
+      });
+      const content=String(body?.choices?.[0]?.message?.content||'');
+      return {content,body,diagnostic};
+    }
+  }
+  function chooseVictorsModel(models,preferred){
+    const list=(models||[]).map(String).filter(Boolean);
+    if(preferred&&list.includes(preferred))return preferred;
+    if(list.includes(VICTORS_DEFAULT_MODEL))return VICTORS_DEFAULT_MODEL;
+    const coding=list.find(id=>/coding|code|codestral|coder|devstral|north-mini-code/i.test(id)&&(/:free$/.test(id)||/^auto:/.test(id)));
+    if(coding)return coding;
+    const free=list.find(id=>/:free$/.test(id));
+    return free||list[0]||null;
+  }
+  function stripCodeFence(text){
+    let value=String(text||'').trim();
+    const fence=String.fromCharCode(96).repeat(3);
+    if(value.startsWith(fence)&&value.endsWith(fence)){
+      const firstNewline=value.indexOf('\n');
+      const lastFence=value.lastIndexOf(fence);
+      if(firstNewline>=0&&lastFence>firstNewline)value=value.slice(firstNewline+1,lastFence).replace(/\n$/,'');
+    }
+    return value;
   }
 
   class LocalIntelliEngine{
