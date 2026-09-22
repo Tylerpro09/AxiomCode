@@ -64,6 +64,9 @@ function rendererRuntimeHost(item){
     getModels:()=>monaco.editor.getModels(),
     getWorkspace:()=>workspace,
     getActivePath:()=>activePath,
+    network:{
+      request:request=>window.axiom.extensionNetworkRequest(item.id,request)
+    },
     log:message=>logOutput((item.name||item.id)+': '+String(message)),
     status:setStatus,
     info:(title,html)=>showInfo(title,html)
