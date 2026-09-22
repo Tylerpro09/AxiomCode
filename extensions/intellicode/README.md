@@ -4,37 +4,41 @@ Autocompletado inteligente **original de AxiomCode**, creado desde cero.
 
 No contiene código, modelos ni binarios de Visual Studio IntelliCode de Microsoft.
 
-## Versión 1.1.0
+## Versión 1.2.0
 
-La extensión ahora combina varias fuentes locales de contexto:
+Axiom IntelliCode combina aprendizaje local del proyecto con el contexto del archivo activo:
 
-- índice del proyecto completo, no solo los archivos abiertos;
+- índice multiarchivo del workspace;
 - modelo n-gram local de 1, 2 y 3 tokens;
-- símbolos por lenguaje y tipo (clases, funciones, variables, etc.);
-- aprendizaje de miembros después de `.`, `?.`, `::` y `->`;
-- mayor peso para el archivo actualmente abierto;
-- ghost text basado en líneas aprendidas y contexto local;
+- ranking adicional por alcance cercano al cursor;
+- mayor peso para el archivo activo y para el código escrito recientemente;
+- aprendizaje de símbolos por lenguaje y tipo;
+- miembros después de `.`, `?.`, `::` y `->`;
+- ghost text por línea aprendida y por siguiente línea probable;
 - fuzzy matching y coincidencia camelCase;
 - plantillas específicas por lenguaje;
-- caché local compacta de símbolos, sin guardar el código fuente completo;
-- perfil de memoria adaptativo según el hardware;
-- reindexación manual, pausa/activación y limpieza del aprendizaje.
+- caché compacta de símbolos que no almacena el código fuente completo;
+- exclusión de lockfiles, bundles, archivos minificados y carpetas generadas;
+- perfil de memoria automático o seleccionable;
+- índice de proyecto opcional para equipos extremadamente limitados.
 
 Todo funciona localmente. No usa nube, API keys ni telemetría.
 
-## Indexación del proyecto
+## Perfiles de rendimiento
 
-Cuando abres un workspace, Axiom IntelliCode recorre archivos fuente compatibles evitando carpetas pesadas como:
-
-`.git`, `node_modules`, `vendor`, `dist`, `build`, `target`, `.venv`, `coverage` y otras similares.
-
-Perfiles aproximados:
-
-- **Ligero:** hasta 28 archivos / 1.5 MiB de corpus.
+- **Ligero:** hasta 28 archivos / 1.5 MiB de corpus / concurrencia baja.
 - **Equilibrado:** hasta 64 archivos / 4 MiB.
 - **Alto:** hasta 96 archivos / 6 MiB.
 
-Los archivos abiertos se mantienen en un índice separado y reciben mayor peso para que las sugerencias respondan a lo que estás editando ahora.
+El modo automático usa la memoria aproximada expuesta por Chromium para escoger un perfil. También puede cambiarse manualmente desde la paleta de comandos.
+
+## Indexación inteligente
+
+Se omiten carpetas y archivos que normalmente añaden ruido o consumo innecesario:
+
+`.git`, `node_modules`, `vendor`, `dist`, `build`, `target`, `.venv`, `coverage`, lockfiles, sourcemaps, bundles, archivos minificados y generados.
+
+Los archivos de entrada comunes como `index.*`, `main.*`, `app.*`, `server.*` y `core.*` reciben prioridad.
 
 ## Lenguajes
 
@@ -46,10 +50,12 @@ JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Rust, PHP, HTML, CSS, SCSS
 - **Axiom IntelliCode: Reindexar proyecto**
 - **Axiom IntelliCode: Activar/Pausar**
 - **Axiom IntelliCode: Limpiar y reconstruir aprendizaje**
+- **Axiom IntelliCode: Cambiar perfil de memoria**
+- **Axiom IntelliCode: Activar/Desactivar índice de proyecto**
 
 ## Arquitectura
 
-Axiom IntelliCode sigue siendo una extensión 100% de repositorio:
+Axiom IntelliCode es una extensión 100% de repositorio:
 
 ```
 extensions/intellicode/
