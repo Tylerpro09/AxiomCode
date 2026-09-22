@@ -457,6 +457,7 @@ ipcMain.handle('workspace:openPath', async (_, requestedRoot) => {
 });
 ipcMain.handle('file:openDialog', async (_, root) => { const r=await dialog.showOpenDialog(mainWindow,{defaultPath:root||app.getPath('home'),properties:['openFile','multiSelections']}); if(r.canceled)return []; return r.filePaths; });
 ipcMain.handle('file:read', async (_, p) => ({ path: p, content: await fsp.readFile(p, 'utf8') }));
+ipcMain.handle('file:readOptional', async (_, p) => { try { return { path:p, content:await fsp.readFile(p,'utf8') }; } catch (error) { if (error?.code==='ENOENT') return null; throw error; } });
 ipcMain.handle('file:write', async (_, p, content) => { await fsp.writeFile(p, content, 'utf8'); return true; });
 ipcMain.handle('file:create', async (_, p, isDir) => { isDir ? await fsp.mkdir(p, { recursive: true }) : await fsp.writeFile(p, '', { flag: 'wx' }); return true; });
 ipcMain.handle('file:rename', async (_, from, to) => { await fsp.rename(from, to); return true; });
