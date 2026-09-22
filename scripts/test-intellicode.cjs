@@ -4,8 +4,8 @@ const {
   LocalIntelliEngine,tokenise,languageFromPath,fuzzyMatch,version
 }=require('../extensions/intellicode/runtime.js');
 
-test('Axiom IntelliCode 1.1.0 exposes the original local engine',()=>{
-  assert.equal(version,'1.1.0');
+test('Axiom IntelliCode 1.2.0 exposes the original local engine',()=>{
+  assert.equal(version,'1.2.0');
   assert.deepEqual(tokenise('alpha?.beta::gamma->delta'),['alpha','?.','beta','::','gamma','->','delta']);
 });
 
