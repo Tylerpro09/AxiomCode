@@ -24,7 +24,8 @@
     "test:intellicode": "node --test scripts/test-intellicode.cjs",
     "test:extension-runtime:smoke": "electron scripts/smoke-generic-extension-runtime.cjs",
     "test:intellicode:smoke": "electron scripts/smoke-intellicode-project.cjs",
-    "test:extension-network:smoke": "electron scripts/smoke-extension-network.cjs"
+    "test:extension-network:smoke": "electron scripts/smoke-extension-network.cjs",
+    "test:problems:smoke": "electron scripts/smoke-problems.cjs"
   },
   "author": "AxiomCode",
   "license": "MIT",
