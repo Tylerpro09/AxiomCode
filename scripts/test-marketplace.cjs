@@ -31,7 +31,7 @@ test('server catalog exposes IntelliCode only as a repository package',()=>{
   const serverCatalog=JSON.parse(fs.readFileSync(path.resolve(__dirname,'..','marketplace','catalog.json'),'utf8'));
   const intellicode=serverCatalog.extensions.find(x=>x.id==='axiom.intellicode');
   assert.ok(intellicode);
-  assert.equal(intellicode.version,'1.1.0');
+  assert.equal(intellicode.version,'1.2.0');
   assert.equal(intellicode.requiresFeature,'rendererRuntime');
   assert.equal(intellicode.install.kind,'repository');
   assert.equal(intellicode.install.subdir,'extensions/intellicode');
