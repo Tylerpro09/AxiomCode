@@ -2,37 +2,62 @@
 
 Autocompletado inteligente **original de AxiomCode**, creado desde cero.
 
-No contiene código ni modelos de Visual Studio IntelliCode de Microsoft.
+No contiene código, modelos ni binarios de Visual Studio IntelliCode de Microsoft.
 
-## Qué hace
+## Versión 1.1.0
 
-- Aprende de los archivos que tienes abiertos.
-- Usa contexto de 1 y 2 tokens (modelo n-gram local).
-- Indexa símbolos y frecuencia de uso.
-- Añade plantillas inteligentes por lenguaje.
-- Ofrece sugerencias normales de IntelliSense y ghost text inline.
-- Reentrena en segundo plano cuando editas código.
-- Funciona completamente local.
-- Sin cuentas, nube, API keys ni telemetría.
+La extensión ahora combina varias fuentes locales de contexto:
 
-## Lenguajes iniciales
+- índice del proyecto completo, no solo los archivos abiertos;
+- modelo n-gram local de 1, 2 y 3 tokens;
+- símbolos por lenguaje y tipo (clases, funciones, variables, etc.);
+- aprendizaje de miembros después de `.`, `?.`, `::` y `->`;
+- mayor peso para el archivo actualmente abierto;
+- ghost text basado en líneas aprendidas y contexto local;
+- fuzzy matching y coincidencia camelCase;
+- plantillas específicas por lenguaje;
+- caché local compacta de símbolos, sin guardar el código fuente completo;
+- perfil de memoria adaptativo según el hardware;
+- reindexación manual, pausa/activación y limpieza del aprendizaje.
 
-JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Rust, PHP, HTML, CSS/SCSS, JSON, SQL, Shell, PowerShell y Lua.
+Todo funciona localmente. No usa nube, API keys ni telemetría.
 
-## Rendimiento
+## Indexación del proyecto
 
-El motor está limitado deliberadamente para PCs modestos:
+Cuando abres un workspace, Axiom IntelliCode recorre archivos fuente compatibles evitando carpetas pesadas como:
 
-- hasta 384 KiB por modelo abierto,
-- hasta 2 MiB de corpus total,
-- hasta 20.000 contextos,
-- hasta 12.000 símbolos,
-- máximo 16 modelos abiertos por reconstrucción.
+`.git`, `node_modules`, `vendor`, `dist`, `build`, `target`, `.venv`, `coverage` y otras similares.
 
-La extensión vive en el repositorio y se instala desde AxiomCode Marketplace; no forma parte del Setup principal.
+Perfiles aproximados:
 
-## Arquitectura de extensión
+- **Ligero:** hasta 28 archivos / 1.5 MiB de corpus.
+- **Equilibrado:** hasta 64 archivos / 4 MiB.
+- **Alto:** hasta 96 archivos / 6 MiB.
 
-La extensión se instala desde `extensions/intellicode` mediante AxiomCode Marketplace. El editor no contiene lógica específica de IntelliCode: solo expone el cargador genérico `contributes.rendererRuntime`. El manifiesto declara `runtime.js` y el runtime registra sus sugerencias y comandos al activarse.
+Los archivos abiertos se mantienen en un índice separado y reciben mayor peso para que las sugerencias respondan a lo que estás editando ahora.
 
-El Setup de AxiomCode no incluye esta carpeta ni sus archivos.
+## Lenguajes
+
+JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Rust, PHP, HTML, CSS, SCSS, JSON, SQL, Shell, PowerShell, Lua, YAML, XML, Markdown y Batch/CMD.
+
+## Comandos
+
+- **Axiom IntelliCode: Estado**
+- **Axiom IntelliCode: Reindexar proyecto**
+- **Axiom IntelliCode: Activar/Pausar**
+- **Axiom IntelliCode: Limpiar y reconstruir aprendizaje**
+
+## Arquitectura
+
+Axiom IntelliCode sigue siendo una extensión 100% de repositorio:
+
+```
+extensions/intellicode/
+├─ extension.json
+├─ runtime.js
+└─ README.md
+```
+
+AxiomCode no contiene lógica específica de IntelliCode. El editor solo expone el cargador genérico `contributes.rendererRuntime`.
+
+La extensión se descarga desde AxiomCode Marketplace y se instala en el directorio de extensiones del usuario. El Setup de AxiomCode no incluye esta carpeta ni sus archivos.
