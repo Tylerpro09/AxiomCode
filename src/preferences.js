@@ -86,7 +86,7 @@
     const w=state.hooks?.getWorkspace?.();
     if(!w?.root)return state.workspace;
     const p=sepJoin(w.root,'.axiomcode','settings.json');
-    try{state.workspace=JSON.parse((await window.axiom.readFile(p)).content)||{};}catch{}
+    try{const file=await window.axiom.readFileOptional(p);if(file?.content)state.workspace=JSON.parse(file.content)||{};}catch{}
     return state.workspace;
   }
   async function saveWorkspaceSettings(){
