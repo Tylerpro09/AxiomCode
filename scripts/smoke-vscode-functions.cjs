@@ -37,7 +37,19 @@ app.whenReady().then(async()=>{try{
     const bars=await window.axiom.searchWorkspace(root,'bar',{matchCase:true});
     const regexReplaced=await window.axiom.replaceWorkspace(root,'b(ar)','x$1',{matchCase:true,regex:true});
     const xars=await window.axiom.searchWorkspace(root,'xar',{matchCase:true});
-    await openFile(root+'\\\\src\\\\alpha.js');
+    explorerClipboard={mode:'copy',path:root+'\\\\src\\\\beta.js'};
+    const pasted=await pasteExplorerPath(root,true);
+    const copiedFile=await window.axiom.readFile(root+'\\\\beta.js');
+    const alphaPath=root+'\\\\src\\\\alpha.js';
+    const betaPath=root+'\\\\src\\\\beta.js';
+    await openFile(alphaPath);
+    await openFile(betaPath);
+    togglePinTab(alphaPath);
+    const pinned=tabs.get(alphaPath)?.pinned===true&&[...tabs.keys()][0]===alphaPath;
+    togglePinTab(alphaPath);
+    reorderTab(betaPath,alphaPath);
+    const reordered=[...tabs.keys()].indexOf(betaPath)<[...tabs.keys()].indexOf(alphaPath);
+    activate(alphaPath);
     setSideMode('search');
     await new Promise(r=>setTimeout(r,100));
     const searchReplaceUi=Boolean(document.querySelector('#sideReplaceInput')&&document.querySelector('#replaceAllBtn')&&document.querySelector('#searchCaseBtn')&&document.querySelector('#searchWordBtn')&&document.querySelector('#searchRegexBtn'));
@@ -70,6 +82,10 @@ app.whenReady().then(async()=>{try{
       bars:bars.length,
       regexReplaced,
       xars:xars.length,
+      pasted,
+      copiedFileOk:/xar/i.test(copiedFile.content),
+      pinned,
+      reordered,
       recent:(await window.axiom.recentWorkspaces()).includes(root),
       breadcrumbs:[...document.querySelectorAll('.breadcrumb-item')].map(x=>x.textContent.trim()),
       searchReplaceUi,
@@ -81,7 +97,8 @@ app.whenReady().then(async()=>{try{
       commandCoverage:[
         'Editor: Ir a definición','Editor: Ver definición','Editor: Ir a referencias',
         'Editor: Cambiar nombre de símbolo','Editor: Acción rápida','Editor: Ir a símbolo...',
-        'Proyecto: Buscar y reemplazar','Archivo: Abrir reciente...'
+        'Proyecto: Buscar y reemplazar','Archivo: Abrir reciente...',
+        'Editor: Fijar/desfijar pestaña','Editor: Cerrar otros editores','Editor: Cerrar editores a la derecha'
       ].every(name=>commandNames.includes(name))
     };
   })()`);
@@ -93,6 +110,8 @@ app.whenReady().then(async()=>{try{
   if(result.replaced.replacements!==3||result.replaced.filesChanged<1)throw Error('Workspace replace failed');
   if(result.after!==0||result.bars!==3)throw Error('Workspace replace verification failed');
   if(result.regexReplaced.replacements!==3||result.xars!==3)throw Error('Regex replace with capture groups failed');
+  if(!result.pasted||!result.copiedFileOk)throw Error('Explorer copy/paste failed');
+  if(!result.pinned||!result.reordered)throw Error('Pinned/reordered tabs failed');
   if(!result.recent)throw Error('Recent workspace integration failed');
   if(result.breadcrumbs.length<2)throw Error('Breadcrumbs did not render path segments');
   if(!result.searchReplaceUi)throw Error('Search/replace UI missing');
@@ -102,6 +121,6 @@ app.whenReady().then(async()=>{try{
   if(!result.peekVisible)throw Error('Peek definition preview failed');
   if(!result.outlineRows?.some(x=>/alphaSymbol/.test(x)))throw Error('Outline view failed');
   if(!result.commandCoverage)throw Error('Command palette coverage missing');
-  log('PASS search/replace regex/whole-word, recent workspaces, breadcrumbs, editor navigation/actions');
+  log('PASS search/replace regex/whole-word, Explorer copy/paste, pinned/reordered tabs, recent workspaces, breadcrumbs, editor navigation/actions');
   finish(0);
 }catch(error){log(error.stack||error);finish(1)}});
