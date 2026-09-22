@@ -46,7 +46,7 @@ async function loadEditorRelease(){
 async function loadCatalog(){
   try{
     let data;
-    try{data=await api('/api/catalog?features=rendererRuntime');}
+    try{data=await api('/api/catalog?features=rendererRuntime,rendererRuntimeNetwork');}
     catch{
       const r=await fetch('./catalog.json',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);data=await r.json();
     }
