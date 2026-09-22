@@ -472,6 +472,7 @@ ipcMain.handle('file:readOptional', async (_, p) => { try { return { path:p, con
 ipcMain.handle('file:write', async (_, p, content) => { await fsp.writeFile(p, content, 'utf8'); return true; });
 ipcMain.handle('file:create', async (_, p, isDir) => { isDir ? await fsp.mkdir(p, { recursive: true }) : await fsp.writeFile(p, '', { flag: 'wx' }); return true; });
 ipcMain.handle('file:rename', async (_, from, to) => { await fsp.rename(from, to); return true; });
+ipcMain.handle('file:copy', async (_, from, to) => { await fsp.cp(from, to, {recursive:true,errorOnExist:true,force:false}); return true; });
 ipcMain.handle('file:delete', async (_, p) => { await fsp.rm(p, { recursive: true, force: true }); return true; });
 ipcMain.handle('terminal:run', async (_, command, cwd) => run(command, cwd));
 ipcMain.handle('git:status', async (_, cwd) => run('git status --porcelain -b', cwd));
