@@ -42,33 +42,6 @@
         "ref": "main",
         "subdir": "extensions/runner"
       }
-    },
-    {
-      "id": "axiom.intellicode",
-      "name": "Axiom IntelliCode",
-      "version": "1.0.0",
-      "description": "Autocompletado inteligente local creado desde cero para AxiomCode. Aprende del código abierto, combina contexto n-gram, símbolos y plantillas por lenguaje, sin nube ni telemetría.",
-      "publisher": "AxiomCode",
-      "verified": true,
-      "featured": true,
-      "requiresFeature": "intellicode",
-      "tags": [
-        "ai",
-        "autocomplete",
-        "intellisense",
-        "local",
-        "python",
-        "javascript",
-        "typescript",
-        "java"
-      ],
-      "homepage": "https://github.com/Tylerpro09/AxiomCode/tree/main/extensions/intellicode",
-      "install": {
-        "kind": "repository",
-        "repoUrl": "https://github.com/Tylerpro09/AxiomCode",
-        "ref": "main",
-        "subdir": "extensions/intellicode"
-      }
     }
   ]
 }
