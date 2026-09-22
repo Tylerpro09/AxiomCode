@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "AxiomCode Marketplace",
-  "generatedAt": "2026-09-22T02:23:45.868Z",
+  "generatedAt": "2026-09-22T02:30:52.255Z",
   "extensions": [
     {
       "id": "axiom.scratch-mode",
@@ -50,8 +50,8 @@
     {
       "id": "axiom.intellicode",
       "name": "Axiom IntelliCode",
-      "version": "1.1.0",
-      "description": "Autocompletado inteligente local avanzado: indexa el proyecto y archivos abiertos, aprende contexto de hasta 3 tokens, miembros y símbolos, ofrece ghost text y plantillas, con perfil adaptativo para PCs modestos.",
+      "version": "1.2.0",
+      "description": "Autocompletado inteligente local avanzado con índice multiarchivo configurable, contexto de hasta 3 tokens, ranking por alcance y archivo activo, miembros, ghost text y perfiles adaptativos para PCs modestos.",
       "publisher": "AxiomCode",
       "verified": true,
       "featured": true,
@@ -68,7 +68,9 @@
         "multi-file",
         "ghost-text",
         "project-index",
-        "local-ai"
+        "local-ai",
+        "scope-aware",
+        "adaptive-memory"
       ],
       "homepage": "https://github.com/Tylerpro09/AxiomCode/tree/main/extensions/intellicode",
       "install": {
