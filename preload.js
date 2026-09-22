@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('axiom', {
   openScratch: () => ipcRenderer.invoke('scratch:open'),
   saveScratch: data => ipcRenderer.invoke('scratch:save', data),
   openWorkspace: () => ipcRenderer.invoke('workspace:open'),
+  createStarterProject: (kind, name) => ipcRenderer.invoke('workspace:createStarter', kind, name),
   refreshWorkspace: root => ipcRenderer.invoke('workspace:refresh', root),
   restoreWorkspace: () => ipcRenderer.invoke('workspace:restore'),
   recentWorkspaces: () => ipcRenderer.invoke('workspace:recent'),
@@ -71,5 +72,9 @@ contextBridge.exposeInMainWorld('axiom', {
   reveal: p => ipcRenderer.invoke('system:reveal', p),
   clipboardWrite: text => ipcRenderer.invoke('system:clipboardWrite', text),
   openExternal: url => ipcRenderer.invoke('system:openExternal', url),
+  startLivePreview: (root, filePath) => ipcRenderer.invoke('preview:start', root, filePath),
+  updateLivePreview: (id, filePath, content) => ipcRenderer.invoke('preview:update', id, filePath, content),
+  stopLivePreview: id => ipcRenderer.invoke('preview:stop', id),
+  openLivePreviewExternal: id => ipcRenderer.invoke('preview:openExternal', id),
   rendererReady: info => ipcRenderer.send('renderer:ready', info)
 });

@@ -5,6 +5,8 @@ const path = require('path');
 const os = require('os');
 const dns = require('dns').promises;
 const net = require('net');
+const http = require('http');
+const crypto = require('crypto');
 const { exec, spawn } = require('child_process');
 const { Transform, Readable } = require('stream');
 const { pipeline } = require('stream/promises');
@@ -269,6 +271,100 @@ ipcMain.handle('scratch:save', async (_, data) => {
 });
 const { ScratchService } = require('./backend/services/scratchService');
 let mainWindow, backend, scratchService, runnerService, runnerServicePath;
+let livePreviewServer=null,livePreviewPort=0;
+const livePreviewSessions=new Map();
+const LIVE_PREVIEW_MAX_OVERRIDE_BYTES=12*1024*1024;
+function pathInside(root,target){
+  const base=path.resolve(String(root||'')),full=path.resolve(String(target||''));
+  const relative=path.relative(base,full);
+  return relative===''||(!relative.startsWith('..'+path.sep)&&relative!=='..'&&!path.isAbsolute(relative));
+}
+function previewMime(filePath){
+  const ext=path.extname(filePath).toLowerCase();
+  return ({'.html':'text/html; charset=utf-8','.htm':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.ico':'image/x-icon','.woff':'font/woff','.woff2':'font/woff2','.ttf':'font/ttf','.map':'application/json; charset=utf-8'})[ext]||'application/octet-stream';
+}
+function previewRoute(sessionId,filePath,root){
+  const relative=path.relative(root,filePath).split(path.sep).map(encodeURIComponent).join('/');
+  return '/preview/'+encodeURIComponent(sessionId)+'/'+relative;
+}
+async function ensureLivePreviewServer(){
+  if(livePreviewServer&&livePreviewPort)return livePreviewPort;
+  livePreviewServer=http.createServer(async(req,res)=>{
+    try{
+      const requestUrl=new URL(req.url||'/','http://127.0.0.1');
+      const parts=requestUrl.pathname.split('/').filter(Boolean);
+      if(parts[0]!=='preview'||!parts[1]){res.writeHead(404);res.end('Not found');return;}
+      const session=livePreviewSessions.get(decodeURIComponent(parts[1]));
+      if(!session){res.writeHead(404);res.end('Preview session not found');return;}
+      let relative=parts.slice(2).map(decodeURIComponent).join(path.sep);
+      let target=path.resolve(session.root,relative||path.relative(session.root,session.entry));
+      if(!pathInside(session.root,target)){res.writeHead(403);res.end('Forbidden');return;}
+      let stat;
+      try{stat=await fsp.stat(target);}catch{stat=null;}
+      if(stat?.isDirectory()){
+        target=path.join(target,'index.html');
+        if(!pathInside(session.root,target)){res.writeHead(403);res.end('Forbidden');return;}
+      }
+      let body=session.overrides.get(target);
+      if(body===undefined){
+        try{body=await fsp.readFile(target);}catch{res.writeHead(404);res.end('File not found');return;}
+      }
+      if(typeof body==='string')body=Buffer.from(body,'utf8');
+      res.writeHead(200,{
+        'Content-Type':previewMime(target),
+        'Cache-Control':'no-store, no-cache, must-revalidate',
+        'Pragma':'no-cache',
+        'X-Content-Type-Options':'nosniff',
+        'Cross-Origin-Resource-Policy':'same-origin'
+      });
+      res.end(body);
+    }catch(error){
+      res.writeHead(500,{'Content-Type':'text/plain; charset=utf-8'});
+      res.end('Axiom Live Preview: '+String(error?.message||error));
+    }
+  });
+  await new Promise((resolve,reject)=>{
+    const onError=error=>{livePreviewServer?.off('listening',onListening);reject(error);};
+    const onListening=()=>{livePreviewServer?.off('error',onError);resolve();};
+    livePreviewServer.once('error',onError);
+    livePreviewServer.once('listening',onListening);
+    livePreviewServer.listen(0,'127.0.0.1');
+  });
+  livePreviewPort=livePreviewServer.address().port;
+  return livePreviewPort;
+}
+async function stopLivePreviewServer(){
+  livePreviewSessions.clear();
+  const server=livePreviewServer;
+  livePreviewServer=null;livePreviewPort=0;
+  if(server)await new Promise(resolve=>server.close(()=>resolve())).catch(()=>{});
+}
+async function startLivePreview(root,filePath){
+  const entry=path.resolve(String(filePath||''));
+  const resolvedRoot=path.resolve(String(root||path.dirname(entry)));
+  if(!/\.html?$/i.test(entry))throw new Error('Axiom Live Preview requiere un archivo HTML');
+  if(!pathInside(resolvedRoot,entry))throw new Error('El archivo HTML está fuera del proyecto');
+  const st=await fsp.stat(entry);
+  if(!st.isFile())throw new Error('El archivo de preview no es válido');
+  const port=await ensureLivePreviewServer();
+  const id=crypto.randomBytes(12).toString('hex');
+  const session={id,root:resolvedRoot,entry,overrides:new Map(),createdAt:Date.now()};
+  livePreviewSessions.set(id,session);
+  const route=previewRoute(id,entry,resolvedRoot);
+  const url='http://127.0.0.1:'+port+route;
+  session.url=url;
+  return {id,url,entry,root:resolvedRoot};
+}
+function updateLivePreview(id,filePath,content){
+  const session=livePreviewSessions.get(String(id||''));
+  if(!session)throw new Error('La sesión de Live Preview ya no existe');
+  const target=path.resolve(String(filePath||''));
+  if(!pathInside(session.root,target))throw new Error('El archivo está fuera del proyecto');
+  const text=String(content??'');
+  if(Buffer.byteLength(text)>LIVE_PREVIEW_MAX_OVERRIDE_BYTES)throw new Error('El contenido de preview supera 12 MiB');
+  session.overrides.set(target,text);
+  return {ok:true,path:target,bytes:Buffer.byteLength(text)};
+}
 const UPDATE_REPO='Tylerpro09/AxiomCode';
 let cachedUpdate=null,updateDownloadActive=false;
 function versionParts(v){
@@ -452,9 +548,42 @@ function runGitArgs(args,cwd){
   });
 }
 app.whenReady().then(async()=>{backend=createBackend(app,__dirname,safeRendererSend);await backend.configuration.load();createWindow();});
-app.on('window-all-closed', () => { backend?.watcher.dispose(); scratchService?.close(); if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => { backend?.watcher.dispose(); scratchService?.close(); stopLivePreviewServer(); if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 ipcMain.handle('workspace:open', async () => { const r = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] }); if (r.canceled) return null; const root = r.filePaths[0]; await backend.workspace.remember(root); backend.watcher.watch(root); return { root, tree: await tree(root) }; });
+ipcMain.handle('workspace:createStarter', async (_,kind,name) => {
+  kind=String(kind||'').toLowerCase();
+  const projectName=String(name||'').trim();
+  if(!['web','node','python'].includes(kind))throw new Error('Plantilla no válida');
+  if(!projectName||projectName.length>80||/[<>:"/\\|?*\x00-\x1f]/.test(projectName)||projectName==='.'||projectName==='..')throw new Error('Nombre de proyecto no válido');
+  const pick=await dialog.showOpenDialog(mainWindow,{title:'AxiomCode · Elegir carpeta para el proyecto',properties:['openDirectory','createDirectory']});
+  if(pick.canceled)return null;
+  const root=path.join(pick.filePaths[0],projectName);
+  try{await fsp.mkdir(root,{recursive:false});}catch(error){if(error?.code==='EEXIST')throw new Error('Ya existe una carpeta con ese nombre');throw error;}
+  const files=kind==='web'?{
+    'index.html':'<!doctype html>\n<html lang="es">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1">\n  <title>'+projectName+'</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <main class="app">\n    <h1>'+projectName+'</h1>\n    <p>Creado con AxiomCode.</p>\n    <button id="action">Probar JavaScript</button>\n  </main>\n  <script src="app.js"></script>\n</body>\n</html>\n',
+    'style.css':'*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,sans-serif;background:#111827;color:#f3f4f6}.app{width:min(680px,90vw);padding:48px;border:1px solid #374151;border-radius:18px;background:#1f2937}button{padding:10px 16px;border:0;border-radius:8px;cursor:pointer}\n',
+    'app.js':"document.querySelector('#action').addEventListener('click',()=>alert('AxiomCode listo.'));\n"
+  }:kind==='node'?{
+    'package.json':JSON.stringify({name:projectName.toLowerCase().replace(/[^a-z0-9-_]/g,'-'),version:'1.0.0',private:true,scripts:{start:'node src/index.js'}},null,2)+'\n',
+    'src/index.js':"console.log('"+projectName.replace(/'/g,"\\'")+" · Node.js listo en AxiomCode');\n",
+    'README.md':'# '+projectName+'\n\nStarter Node.js creado con AxiomCode.\n'
+  }:{
+    'main.py':"def main():\n    print('"+projectName.replace(/'/g,"\\'")+" · Python listo en AxiomCode')\n\n\nif __name__ == '__main__':\n    main()\n",
+    'README.md':'# '+projectName+'\n\nStarter Python creado con AxiomCode.\n',
+    '.gitignore':'__pycache__/\n.venv/\n*.pyc\n'
+  };
+  try{
+    for(const [relative,content] of Object.entries(files)){
+      const target=path.join(root,relative);
+      await fsp.mkdir(path.dirname(target),{recursive:true});
+      await fsp.writeFile(target,content,'utf8');
+    }
+  }catch(error){await fsp.rm(root,{recursive:true,force:true}).catch(()=>{});throw error;}
+  await backend.workspace.remember(root);
+  backend.watcher.watch(root);
+  return {root,tree:await tree(root),kind};
+});
 ipcMain.handle('workspace:refresh', async (_, root) => ({ root, tree: await tree(root) }));
 ipcMain.handle('workspace:restore', async()=>{const root=await backend.workspace.restoreLast();if(!root)return null;backend.watcher.watch(root);return{root,tree:await tree(root)};});
 ipcMain.handle('workspace:recent', ()=>backend.workspace.recent());
@@ -499,6 +628,16 @@ ipcMain.handle('system:openExternal', async (_, rawUrl) => {
   const url=new URL(String(rawUrl||''));
   if(url.protocol!=='https:')throw new Error('Solo se permiten enlaces HTTPS');
   const error=await shell.openExternal(url.href);
+  if(error)throw new Error(error);
+  return true;
+});
+ipcMain.handle('preview:start', async (_,root,filePath) => startLivePreview(root,filePath));
+ipcMain.handle('preview:update', (_,id,filePath,content) => updateLivePreview(id,filePath,content));
+ipcMain.handle('preview:stop', (_,id) => livePreviewSessions.delete(String(id||'')));
+ipcMain.handle('preview:openExternal', async (_,id) => {
+  const session=livePreviewSessions.get(String(id||''));
+  if(!session)throw new Error('La sesión de Live Preview ya no existe');
+  const error=await shell.openExternal(session.url);
   if(error)throw new Error(error);
   return true;
 });

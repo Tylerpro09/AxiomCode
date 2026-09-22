@@ -3,7 +3,8 @@ let editor=null,workspace=null,activePath=null,iconManifest=null,paletteMode='co
 const tabs=new Map(), terminalState={sessions:new Map(),active:null};
 const extensionRuntimes=new Map(), extensionCommands=new Map();
 const outputLog=[], debugLog=[], recentlyClosedEditors=[], navigationBack=[], navigationForward=[];
-let autoSaveTimer=null,explorerClipboard=null,explorerSelection=null,suppressNavigationHistory=false;
+let autoSaveTimer=null,explorerClipboard=null,explorerSelection=null,suppressNavigationHistory=false,livePreviewTimer=null,zenMode=false;
+let livePreviewState={id:null,url:null,entry:null,root:null,device:'desktop'};
 async function ensureScratchAssetsLoaded(){
   if(scratchAssetsLoaded&&window.AxiomScratch)return true;
   if(!scratchInstalled)return false;
@@ -462,7 +463,129 @@ function activate(p){window.AxiomScratch?.hide();const t=tabs.get(p);if(!t)retur
 function closeTab(p){const t=tabs.get(p);if(!t)return false;if(t.dirty&&!confirm(`Hay cambios sin guardar en ${basename(p)}. ¿Cerrar?`))return false;recentlyClosedEditors.push({path:p,pinned:Boolean(t.pinned)});if(recentlyClosedEditors.length>50)recentlyClosedEditors.shift();const wasActive=activePath===p;t.model.dispose();tabs.delete(p);if(wasActive){const next=[...tabs.keys()].pop()||null;activePath=null;if(next){suppressNavigationHistory=true;try{activate(next);}finally{suppressNavigationHistory=false;}}else{showCode(false);renderBreadcrumbs();}}renderTabs();return true;}
 async function saveActive(){if(window.AxiomScratch?.visible)return window.AxiomScratch.save();if(!activePath)return;const t=tabs.get(activePath);await window.axiom.writeFile(activePath,t.model.getValue());t.dirty=false;renderTabs();setStatus('Guardado '+basename(activePath));logOutput('Guardado '+activePath);if(activePath===window.AxiomPreferences?.state?.settingsPath)await window.AxiomPreferences.reloadFromDisk();}
 async function saveAll(){if(window.AxiomScratch?.visible)await window.AxiomScratch.save();for(const [p,t] of tabs){if(t.dirty){await window.axiom.writeFile(p,t.model.getValue());t.dirty=false;}}renderTabs();setStatus('Todos los archivos guardados');}
-function useWorkspace(w,restored=false){if(!w)return;workspace=w;$('#workspaceName').textContent=basename(w.root).toUpperCase();renderBreadcrumbs();sideMode='explorer';renderSideView();setStatus((restored?'Proyecto restaurado: ':'Proyecto: ')+w.root);logOutput((restored?'Carpeta restaurada: ':'Carpeta abierta: ')+w.root);updateGit();window.AxiomPreferences?.onWorkspaceChanged();}
+async function createStarterProject(kind){
+  const labels={web:'Web Starter',node:'Node Starter',python:'Python Starter'};
+  if(!labels[kind])return false;
+  const name=await askInput('Nombre para '+labels[kind]+':');if(!name)return false;
+  try{
+    const created=await window.axiom.createStarterProject(kind,name);
+    if(!created)return false;
+    useWorkspace(created,false);
+    const target=kind==='web'?join(created.root,'index.html'):kind==='node'?join(created.root,'src','index.js'):join(created.root,'main.py');
+    await openFile(target);
+    if(kind==='web')setTimeout(()=>openLivePreview(target),100);
+    setStatus(labels[kind]+' creado: '+basename(created.root));
+    return true;
+  }catch(error){showInfo('Crear proyecto','<p>'+escapeHtml(error.message)+'</p>');return false;}
+}
+async function renderWelcomeRecents(){
+  const host=$('#welcomeRecentList');if(!host)return;
+  let items=[];try{items=await window.axiom.recentWorkspaces();}catch{}
+  host.innerHTML='';
+  if(!items?.length){host.innerHTML='<span class="welcome-recent-empty">Aún no hay proyectos recientes.</span>';return;}
+  for(const p of items.slice(0,6)){
+    const b=document.createElement('button');b.className='welcome-recent';b.title=p;
+    b.innerHTML='<span><strong>'+escapeHtml(basename(p))+'</strong><small>'+escapeHtml(p)+'</small></span><span class="codicon codicon-chevron-right"></span>';
+    b.onclick=async()=>{try{const w=await window.axiom.openWorkspacePath(p);useWorkspace(w,false);}catch(e){showInfo('Proyecto reciente','<p>'+escapeHtml(e.message)+'</p>');}};
+    host.appendChild(b);
+  }
+}
+function previewEntryCandidate(){
+  if(activePath&&/\.html?$/i.test(activePath))return activePath;
+  if(livePreviewState.entry)return livePreviewState.entry;
+  for(const p of tabs.keys())if(/\.html?$/i.test(p))return p;
+  if(workspace){
+    const files=filesOf(workspace.tree||[]);
+    return files.find(f=>/^index\.html?$/i.test(f.name))?.path||files.find(f=>/\.html?$/i.test(f.name))?.path||null;
+  }
+  return null;
+}
+function previewRootFor(entry){
+  if(workspace?.root){
+    const root=normalizeSlash(workspace.root).replace(/\/$/,'').toLowerCase();
+    const full=normalizeSlash(entry).toLowerCase();
+    if(full===root||full.startsWith(root+'/'))return workspace.root;
+  }
+  const dir=dirname(entry);return /^[A-Za-z]:$/.test(dir)?dir+'\\':dir;
+}
+function setPreviewDevice(device='desktop'){
+  if(!['desktop','tablet','mobile'].includes(device))device='desktop';
+  livePreviewState.device=device;
+  const canvas=$('#previewCanvas');if(canvas)canvas.dataset.device=device;
+  $$('[data-preview-device]').forEach(b=>b.classList.toggle('active',b.dataset.previewDevice===device));
+}
+function refreshLivePreviewFrame(){
+  if(!livePreviewState.url)return false;
+  const frame=$('#previewFrame');if(!frame)return false;
+  const joiner=livePreviewState.url.includes('?')?'&':'?';
+  frame.src=livePreviewState.url+joiner+'axiom_reload='+Date.now();
+  return true;
+}
+async function syncLivePreviewPath(p,content,reload=true){
+  if(!livePreviewState.id||!p)return false;
+  try{
+    await window.axiom.updateLivePreview(livePreviewState.id,p,content);
+    if(reload)refreshLivePreviewFrame();
+    return true;
+  }catch{return false;}
+}
+function scheduleLivePreviewUpdate(){
+  if(!livePreviewState.id||!activePath)return;
+  clearTimeout(livePreviewTimer);
+  livePreviewTimer=setTimeout(async()=>{
+    const tab=tabs.get(activePath);if(!tab)return;
+    await syncLivePreviewPath(activePath,tab.model.getValue(),true);
+  },260);
+}
+async function openLivePreview(entry=previewEntryCandidate()){
+  if(!entry){setStatus('Live Preview: abre un archivo HTML');return false;}
+  if(livePreviewState.id&&livePreviewState.entry===entry){
+    document.body.classList.add('preview-open');refreshLivePreviewFrame();return true;
+  }
+  if(livePreviewState.id)await closeLivePreview();
+  try{
+    const root=previewRootFor(entry),session=await window.axiom.startLivePreview(root,entry);
+    livePreviewState={...session,device:'desktop'};
+    for(const [p,t] of tabs)await syncLivePreviewPath(p,t.model.getValue(),false);
+    document.body.classList.add('preview-open');
+    $('#livePreview')?.setAttribute('aria-hidden','false');
+    $('#previewBtn')?.classList.add('preview-active');
+    const label=$('#previewFileLabel');if(label)label.textContent=relativeToWorkspace(entry);
+    setPreviewDevice('desktop');refreshLivePreviewFrame();
+    setStatus('Axiom Live Preview · '+relativeToWorkspace(entry));
+    setTimeout(()=>editor?.layout(),60);
+    return true;
+  }catch(error){
+    showInfo('Axiom Live Preview','<p>'+escapeHtml(error.message)+'</p>');
+    return false;
+  }
+}
+async function closeLivePreview(){
+  clearTimeout(livePreviewTimer);
+  const id=livePreviewState.id;
+  livePreviewState={id:null,url:null,entry:null,root:null,device:'desktop'};
+  document.body.classList.remove('preview-open');
+  $('#livePreview')?.setAttribute('aria-hidden','true');
+  $('#previewBtn')?.classList.remove('preview-active');
+  const frame=$('#previewFrame');if(frame)frame.src='about:blank';
+  if(id)try{await window.axiom.stopLivePreview(id);}catch{}
+  setTimeout(()=>editor?.layout(),50);
+  return true;
+}
+async function toggleLivePreview(){
+  if(livePreviewState.id&&document.body.classList.contains('preview-open'))return closeLivePreview();
+  return openLivePreview();
+}
+function toggleZenMode(force){
+  zenMode=force??!zenMode;
+  document.body.classList.toggle('zen-mode',zenMode);
+  const icon=$('#zenBtn .codicon');if(icon)icon.className='codicon '+(zenMode?'codicon-screen-normal':'codicon-screen-full');
+  $('#zenBtn')?.classList.toggle('preview-active',zenMode);
+  setStatus(zenMode?'Modo Zen activado':'Modo Zen desactivado');
+  setTimeout(()=>{editor?.layout();fitActiveTerminal();},60);
+  return zenMode;
+}
+function useWorkspace(w,restored=false){if(!w)return;if(livePreviewState.id)closeLivePreview();workspace=w;$('#workspaceName').textContent=basename(w.root).toUpperCase();renderBreadcrumbs();sideMode='explorer';renderSideView();renderWelcomeRecents();setStatus((restored?'Proyecto restaurado: ':'Proyecto: ')+w.root);logOutput((restored?'Carpeta restaurada: ':'Carpeta abierta: ')+w.root);updateGit();window.AxiomPreferences?.onWorkspaceChanged();}
 async function openWorkspace(){const w=await window.axiom.openWorkspace();if(w)useWorkspace(w,false);}
 async function refreshWorkspace(){if(!workspace)return;workspace=await window.axiom.refreshWorkspace(workspace.root);renderSideView();setStatus('Explorador actualizado');}
 async function createNewFile(){if(!workspace)return setStatus('Primero abre una carpeta');const name=await askInput('Nombre del nuevo archivo:');if(!name)return;try{const p=join(workspace.root,name);await window.axiom.createFile(p,false);await refreshWorkspace();openFile(p);}catch(e){showInfo('Error',escapeHtml(e.message));}}
@@ -842,7 +965,54 @@ async function renderOutline(host){
     host.appendChild(b);
   }
 }
-function renderSideView(){const host=$('#tree'),title=$('.side-head>span');host.innerHTML='';const titles={explorer:'EXPLORADOR',search:'BUSCAR',scm:'CONTROL DE CÓDIGO FUENTE',run:'EJECUTAR Y DEPURAR',outline:'ESQUEMA',extensions:'EXTENSIONES'};title.textContent=titles[sideMode]||'EXPLORADOR';$$('.activity button').forEach(b=>b.classList.remove('active'));const map={explorer:'#explorerBtn',search:'#searchBtn',scm:'#gitBtn',run:'#runBtn',outline:'#outlineBtn',extensions:'#extensionsBtn'};$(map[sideMode])?.classList.add('active');$('.side-actions').style.display=sideMode==='explorer'?'flex':'none';if(sideMode==='explorer')renderExplorer(host);if(sideMode==='search')renderSearch(host);if(sideMode==='scm')renderSCM(host);if(sideMode==='run')renderRunView(host);if(sideMode==='outline')renderOutline(host);if(sideMode==='extensions')renderExtensions(host);}
+async function renderPulse(host){
+  if(!workspace){host.innerHTML='<div class="view-note">Abre un proyecto para activar Axiom Pulse.</div>';return;}
+  host.innerHTML='<div class="view-note">Analizando proyecto…</div>';
+  const files=filesOf(workspace.tree||[]);
+  const dirty=[...tabs.values()].filter(t=>t.dirty).length;
+  const problems=currentProblemMarkers();
+  const errors=problems.filter(m=>m.severity===monaco.MarkerSeverity.Error).length;
+  const warnings=problems.filter(m=>m.severity===monaco.MarkerSeverity.Warning).length;
+  let gitChanges=0,branch='sin git';
+  try{
+    const [status,changes]=await Promise.all([window.axiom.gitStatus(workspace.root),window.axiom.gitChanges(workspace.root)]);
+    const first=(status.stdout||'').split(/\r?\n/)[0];
+    if(status.ok)branch=(first.replace(/^##\s*/,'').split('...')[0]||'git').trim();
+    gitChanges=(changes.stdout||'').split(/\r?\n/).filter(Boolean).length;
+  }catch{}
+  if(sideMode!=='pulse'||!host.isConnected)return;
+  const extCounts=new Map();
+  for(const f of files){
+    const ext=(f.name.includes('.')?f.name.split('.').pop():'sin ext').toLowerCase();
+    extCounts.set(ext,(extCounts.get(ext)||0)+1);
+  }
+  const languages=[...extCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const signal=Math.max(0,100-Math.min(50,errors*10)-Math.min(20,warnings*2)-Math.min(15,gitChanges)-Math.min(15,dirty*3));
+  host.innerHTML=`<div class="pulse-view">
+    <div class="pulse-hero"><h3><span class="codicon codicon-pulse"></span>Axiom Pulse</h3><p>Estado en tiempo real de <b>${escapeHtml(basename(workspace.root))}</b> · rama ${escapeHtml(branch)}</p></div>
+    <div class="pulse-grid">
+      <div class="pulse-card"><b>${files.length}</b><span>Archivos</span></div>
+      <div class="pulse-card"><b>${tabs.size}</b><span>Editores</span></div>
+      <div class="pulse-card"><b>${problems.length}</b><span>Problemas</span></div>
+      <div class="pulse-card"><b>${gitChanges}</b><span>Cambios Git</span></div>
+    </div>
+    <div class="pulse-section"><h4>Señal del proyecto</h4><div class="pulse-meter"><span style="width:${signal}%"></span></div><div class="pulse-signal"><b>${signal}/100</b><span>${errors} errores · ${warnings} avisos · ${dirty} sin guardar</span></div></div>
+    <div class="pulse-section"><h4>Lenguajes / formatos</h4><div class="pulse-languages">${languages.map(([ext,count])=>'<span class="pulse-chip">.'+escapeHtml(ext)+' · '+count+'</span>').join('')||'<span class="pulse-chip">Sin archivos</span>'}</div></div>
+    <div class="pulse-section"><h4>Acciones rápidas</h4><div class="pulse-actions">
+      <button class="pulse-action" data-pulse="problems"><span class="codicon codicon-warning"></span>Revisar problemas</button>
+      <button class="pulse-action" data-pulse="preview"><span class="codicon codicon-open-preview"></span>Abrir Live Preview</button>
+      <button class="pulse-action" data-pulse="git"><span class="codicon codicon-source-control"></span>Ver cambios Git</button>
+      <button class="pulse-action" data-pulse="search"><span class="codicon codicon-search"></span>Omni Search</button>
+      <button class="pulse-action" data-pulse="run"><span class="codicon codicon-play"></span>Ejecutar archivo activo</button>
+    </div></div>
+  </div>`;
+  host.querySelector('[data-pulse="problems"]').onclick=()=>setPanelMode('problems');
+  host.querySelector('[data-pulse="preview"]').onclick=toggleLivePreview;
+  host.querySelector('[data-pulse="git"]').onclick=()=>setSideMode('scm');
+  host.querySelector('[data-pulse="search"]').onclick=()=>showPalette('unified');
+  host.querySelector('[data-pulse="run"]').onclick=runActiveFile;
+}
+function renderSideView(){const host=$('#tree'),title=$('.side-head>span');host.innerHTML='';const titles={explorer:'EXPLORADOR',search:'BUSCAR',scm:'CONTROL DE CÓDIGO FUENTE',run:'EJECUTAR Y DEPURAR',outline:'ESQUEMA',pulse:'AXIOM PULSE',extensions:'EXTENSIONES'};title.textContent=titles[sideMode]||'EXPLORADOR';$$('.activity button').forEach(b=>b.classList.remove('active'));const map={explorer:'#explorerBtn',search:'#searchBtn',scm:'#gitBtn',run:'#runBtn',outline:'#outlineBtn',pulse:'#pulseBtn',extensions:'#extensionsBtn'};$(map[sideMode])?.classList.add('active');$('.side-actions').style.display=sideMode==='explorer'?'flex':'none';if(sideMode==='explorer')renderExplorer(host);if(sideMode==='search')renderSearch(host);if(sideMode==='scm')renderSCM(host);if(sideMode==='run')renderRunView(host);if(sideMode==='outline')renderOutline(host);if(sideMode==='pulse')renderPulse(host);if(sideMode==='extensions')renderExtensions(host);}
 function setSideMode(mode){sideMode=mode;if(!sidebarVisible)toggleSidebar(true);renderSideView();}
 function toggleSidebar(force){sidebarVisible=force??!sidebarVisible;document.body.classList.toggle('no-sidebar',!sidebarVisible);setTimeout(()=>editor?.layout(),40);}
 async function updateGit(){if(!workspace)return;const r=await window.axiom.gitStatus(workspace.root),first=(r.stdout||'').split(/\r?\n/)[0],branch=r.ok?(first.replace(/^##\s*/,'').split('...')[0]||'git'):'sin git';$('#gitStatus').innerHTML=`<span class="codicon codicon-source-control"></span>${escapeHtml(branch)}`;if(sideMode==='scm')renderSideView();}
@@ -1099,9 +1269,9 @@ async function runActiveFile(){
   await newTerminal('powershell');debugLog.push('Ejecutando '+activePath);await execPersistentTerminal(cmd);setStatus('Ejecutando '+basename(activePath));
 }
 const commands=[
-{name:'Archivo: Nuevo archivo',hint:'',run:createNewFile},{name:'Archivo: Abrir archivo...',hint:'Ctrl+O',run:openFiles},{name:'Archivo: Abrir carpeta...',hint:'Ctrl+K Ctrl+O',run:openWorkspace},{name:'Archivo: Guardar',hint:'Ctrl+S',run:saveActive},{name:'Archivo: Guardar todo',hint:'Ctrl+Shift+S',run:saveAll},{name:'Archivo: Cerrar editor',hint:'Ctrl+W',run:()=>activePath&&closeTab(activePath)},{name:'Archivo: Reabrir editor cerrado',hint:'Ctrl+Shift+T',run:reopenClosedEditor},
+{name:'Archivo: Nuevo archivo',hint:'',run:createNewFile},{name:'Archivo: Abrir archivo...',hint:'Ctrl+O',run:openFiles},{name:'Archivo: Abrir carpeta...',hint:'Ctrl+K Ctrl+O',run:openWorkspace},{name:'Proyecto: Crear Web Starter',hint:'',run:()=>createStarterProject('web')},{name:'Proyecto: Crear Node Starter',hint:'',run:()=>createStarterProject('node')},{name:'Proyecto: Crear Python Starter',hint:'',run:()=>createStarterProject('python')},{name:'Archivo: Guardar',hint:'Ctrl+S',run:saveActive},{name:'Archivo: Guardar todo',hint:'Ctrl+Shift+S',run:saveAll},{name:'Archivo: Cerrar editor',hint:'Ctrl+W',run:()=>activePath&&closeTab(activePath)},{name:'Archivo: Reabrir editor cerrado',hint:'Ctrl+Shift+T',run:reopenClosedEditor},
 {name:'Editor: Fijar/desfijar pestaña',hint:'',run:()=>activePath&&togglePinTab(activePath)},{name:'Editor: Siguiente editor',hint:'Ctrl+Tab',run:()=>cycleEditor(1)},{name:'Editor: Editor anterior',hint:'Ctrl+Shift+Tab',run:()=>cycleEditor(-1)},{name:'Editor: Cerrar otros editores',hint:'',run:()=>closeOtherTabs()},{name:'Editor: Cerrar editores a la derecha',hint:'',run:()=>closeTabsRight()},{name:'Editor: Cerrar editores no fijados',hint:'',run:closeUnpinnedTabs},{name:'Navegación: Atrás',hint:'Alt+Left',run:navigateBack},{name:'Navegación: Adelante',hint:'Alt+Right',run:navigateForward},
-{name:'Scratch: Abrir editor de bloques',hint:'',run:()=>openScratchMode()},{name:'Ver: Explorador',hint:'Ctrl+Shift+E',run:()=>setSideMode('explorer')},{name:'Ver: Buscar',hint:'Ctrl+Shift+F',run:()=>setSideMode('search')},{name:'Ver: Control de código fuente',hint:'Ctrl+Shift+G',run:()=>setSideMode('scm')},{name:'Ver: Esquema (Outline)',hint:'',run:()=>setSideMode('outline')},{name:'Ver: Extensiones',hint:'Ctrl+Shift+X',run:()=>setSideMode('extensions')},{name:'Ver: Alternar barra lateral',hint:'Ctrl+B',run:()=>toggleSidebar()},{name:'Ver: Alternar panel',hint:'Ctrl+J',run:()=>togglePanel()},
+{name:'Scratch: Abrir editor de bloques',hint:'',run:()=>openScratchMode()},{name:'Ver: Axiom Live Preview',hint:'Ctrl+Alt+V',run:toggleLivePreview},{name:'Ver: Axiom Pulse',hint:'Ctrl+Alt+P',run:()=>setSideMode('pulse')},{name:'Ver: Modo Zen',hint:'Ctrl+Alt+Z',run:()=>toggleZenMode()},{name:'Ver: Explorador',hint:'Ctrl+Shift+E',run:()=>setSideMode('explorer')},{name:'Ver: Buscar',hint:'Ctrl+Shift+F',run:()=>setSideMode('search')},{name:'Ver: Control de código fuente',hint:'Ctrl+Shift+G',run:()=>setSideMode('scm')},{name:'Ver: Esquema (Outline)',hint:'',run:()=>setSideMode('outline')},{name:'Ver: Extensiones',hint:'Ctrl+Shift+X',run:()=>setSideMode('extensions')},{name:'Ver: Alternar barra lateral',hint:'Ctrl+B',run:()=>toggleSidebar()},{name:'Ver: Alternar panel',hint:'Ctrl+J',run:()=>togglePanel()},
 {name:'Ejecutar: Archivo activo',hint:'F5',run:runActiveFile},{name:'Runner: Abrir',hint:'',run:openRunnerMode},{name:'Runner: Detener ejecución',hint:'',run:stopRunner},{name:'Terminal: Nueva PowerShell',hint:'',run:()=>newTerminal('powershell')},{name:'Terminal: Nueva CMD',hint:'',run:()=>newTerminal('cmd')},{name:'Terminal: Cerrar activa',hint:'',run:closeActiveTerminal},{name:'Git: Actualizar estado',hint:'',run:updateGit},{name:'Archivo: Revelar en Explorador',hint:'',run:()=>activePath&&window.axiom.reveal(activePath)},
 {name:'Proyecto: Ir a símbolo en el espacio de trabajo',hint:'Ctrl+T',run:()=>showPalette('symbols')},{name:'Editor: Mover línea arriba',hint:'Alt+Up',run:()=>runEditorAction('editor.action.moveLinesUpAction')},{name:'Editor: Mover línea abajo',hint:'Alt+Down',run:()=>runEditorAction('editor.action.moveLinesDownAction')},{name:'Editor: Duplicar línea arriba',hint:'Shift+Alt+Up',run:()=>runEditorAction('editor.action.copyLinesUpAction')},{name:'Editor: Duplicar línea abajo',hint:'Shift+Alt+Down',run:()=>runEditorAction('editor.action.copyLinesDownAction')},{name:'Editor: Eliminar línea',hint:'Ctrl+Shift+K',run:()=>runEditorAction('editor.action.deleteLines')},{name:'Editor: Insertar línea arriba',hint:'Ctrl+Shift+Enter',run:()=>runEditorAction('editor.action.insertLineBefore')},{name:'Editor: Insertar línea abajo',hint:'Ctrl+Enter',run:()=>runEditorAction('editor.action.insertLineAfter')},{name:'Editor: Alternar comentario de línea',hint:'Ctrl+/',run:()=>runEditorAction('editor.action.commentLine')},{name:'Editor: Alternar comentario de bloque',hint:'Shift+Alt+A',run:()=>runEditorAction('editor.action.blockComment')},{name:'Editor: Plegar región',hint:'Ctrl+Shift+[',run:()=>runEditorAction('editor.fold')},{name:'Editor: Desplegar región',hint:'Ctrl+Shift+]',run:()=>runEditorAction('editor.unfold')},{name:'Editor: Plegar todo',hint:'',run:()=>runEditorAction('editor.foldAll')},{name:'Editor: Desplegar todo',hint:'',run:()=>runEditorAction('editor.unfoldAll')},{name:'Editor: Añadir cursor arriba',hint:'Ctrl+Alt+Up',run:()=>runEditorAction('editor.action.insertCursorAbove')},{name:'Editor: Añadir cursor abajo',hint:'Ctrl+Alt+Down',run:()=>runEditorAction('editor.action.insertCursorBelow')},{name:'Editor: Seleccionar siguiente coincidencia',hint:'Ctrl+D',run:()=>runEditorAction('editor.action.addSelectionToNextFindMatch')},{name:'Editor: Seleccionar todas las coincidencias',hint:'Ctrl+Shift+L',run:()=>runEditorAction('editor.action.selectHighlights')},{name:'Editor: Cambiar todas las ocurrencias',hint:'Ctrl+F2',run:()=>runEditorAction('editor.action.changeAll')},{name:'Editor: Formatear documento',hint:'Shift+Alt+F',run:()=>runEditorAction('editor.action.formatDocument')},{name:'Editor: Formatear selección',hint:'',run:()=>runEditorAction('editor.action.formatSelection')},{name:'Editor: Ir a línea',hint:'Ctrl+G',run:()=>runEditorAction('editor.action.gotoLine')},{name:'Editor: Ir a definición',hint:'F12',run:goToDefinition},{name:'Editor: Ver definición',hint:'Alt+F12',run:peekDefinition},{name:'Editor: Ir a referencias',hint:'Shift+F12',run:showReferences},{name:'Editor: Cambiar nombre de símbolo',hint:'F2',run:()=>runEditorAction('editor.action.rename')},{name:'Editor: Acción rápida',hint:'Ctrl+.',run:()=>runEditorAction('editor.action.quickFix')},{name:'Editor: Mostrar sugerencias',hint:'Ctrl+Espacio',run:()=>runEditorAction('editor.action.triggerSuggest')},{name:'Editor: Ir a símbolo...',hint:'Ctrl+Shift+O',run:()=>runEditorAction('editor.action.quickOutline')},{name:'Editor: Siguiente problema',hint:'F8',run:()=>runEditorAction('editor.action.marker.next')},{name:'Editor: Problema anterior',hint:'Shift+F8',run:()=>runEditorAction('editor.action.marker.prev')},{name:'Editor: Buscar',hint:'Ctrl+F',run:()=>runEditorAction('actions.find')},{name:'Editor: Reemplazar',hint:'Ctrl+H',run:()=>runEditorAction('editor.action.startFindReplaceAction')},{name:'Proyecto: Buscar y reemplazar',hint:'Ctrl+Shift+H',run:()=>{setSideMode('search');setTimeout(()=>$('#sideReplaceInput')?.focus(),30);}},{name:'Archivo: Abrir reciente...',hint:'Ctrl+R',run:showRecentWorkspaces},{name:'Preferencias: Settings',hint:'Ctrl+,',run:()=>window.AxiomPreferences?.open('settings')},{name:'Preferencias: Keyboard Shortcuts',hint:'Ctrl+K Ctrl+S',run:()=>window.AxiomPreferences?.open('keybindings')},{name:'Preferencias: Profiles',hint:'',run:()=>window.AxiomPreferences?.open('profiles')},{name:'Preferencias: Backup and Sync Settings',hint:'',run:()=>window.AxiomPreferences?.open('backup')},{name:'Ayuda: Buscar actualizaciones',hint:'',run:()=>checkForAppUpdates(true)}
 ];
@@ -1136,12 +1306,44 @@ function renderPaletteItems(box){
 function showPalette(mode='commands'){
   paletteMode=mode;$('#overlay').classList.remove('hidden');
   const input=$('#paletteInput');input.value='';
-  input.placeholder=mode==='files'?'Buscar archivo (:línea:columna)...':mode==='symbols'?'Buscar símbolo en el proyecto...':'Escribe un comando...';
+  input.placeholder=mode==='files'?'Buscar archivo (:línea:columna)...':mode==='symbols'?'Buscar símbolo en el proyecto...':mode==='unified'?'Buscar archivos, comandos y símbolos…  (> comandos · @ símbolos)':'Escribe un comando...';
   buildPalette('');input.focus();
 }
 function hidePalette(){paletteBuildVersion++;$('#overlay').classList.add('hidden');}
 async function buildPalette(q){
   const box=$('#paletteResults'),version=++paletteBuildVersion;
+  if(paletteMode==='unified'){
+    const raw=String(q||'').trim();
+    if(raw.startsWith('>')){
+      const needle=raw.slice(1).trim().toLowerCase();
+      paletteItems=[...commands,...extensionCommands.values()].map(item=>({item,score:fuzzyScore(item.name+' '+(item.hint||''),needle)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,100).map(x=>x.item);
+      renderPaletteItems(box);return;
+    }
+    if(raw.startsWith('@')){
+      if(!workspace){paletteItems=[];renderPaletteItems(box);return;}
+      box.innerHTML='<div class="palette-empty">Buscando símbolos...</div>';
+      try{
+        const rows=await window.axiom.workspaceSymbols(workspace.root,raw.slice(1).trim());
+        if(version!==paletteBuildVersion||paletteMode!=='unified')return;
+        paletteItems=(rows||[]).slice(0,100).map(s=>({name:'@ '+s.name,hint:s.kind+' · '+relativeToWorkspace(s.path)+':'+s.line,run:()=>openFile(s.path,s.line,s.column)}));
+        renderPaletteItems(box);
+      }catch(error){if(version===paletteBuildVersion){paletteItems=[];box.innerHTML='<div class="palette-empty">'+escapeHtml(error.message)+'</div>';}}
+      return;
+    }
+    const parsed=parseQuickFileQuery(raw);
+    const fileItems=(workspace?filesOf(workspace.tree):[]).map(f=>({f,score:fuzzyScore(f.name+' '+relativeToWorkspace(f.path),parsed.query)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,45).map(({f})=>({name:f.name,hint:'Archivo · '+relativeToWorkspace(f.path)+(parsed.line?':'+parsed.line+(parsed.column?':'+parsed.column:''):''),run:()=>openFile(f.path,parsed.line,parsed.column)}));
+    const commandItems=[...commands,...extensionCommands.values()].map(item=>({item,score:fuzzyScore(item.name+' '+(item.hint||''),raw.toLowerCase())})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,30).map(x=>({...x.item,name:'> '+x.item.name,hint:x.item.hint||'Comando'}));
+    paletteItems=[...fileItems,...commandItems];
+    if(workspace&&raw.length>=2){
+      try{
+        const rows=await window.axiom.workspaceSymbols(workspace.root,raw);
+        if(version!==paletteBuildVersion||paletteMode!=='unified')return;
+        const symbols=(rows||[]).slice(0,25).map(s=>({name:'@ '+s.name,hint:s.kind+' · '+relativeToWorkspace(s.path)+':'+s.line,run:()=>openFile(s.path,s.line,s.column)}));
+        paletteItems=[...fileItems,...symbols,...commandItems];
+      }catch{}
+    }
+    renderPaletteItems(box);return;
+  }
   if(paletteMode==='files'){
     const parsed=parseQuickFileQuery(q);
     const files=workspace?filesOf(workspace.tree):[];
@@ -1174,7 +1376,7 @@ const menuModel={
 file:[['Nuevo archivo',createNewFile],['Abrir archivo...',openFiles],['Abrir carpeta...',openWorkspace],['Abrir reciente...',showRecentWorkspaces],['Guardar',saveActive],['Guardar todo',saveAll],['Cerrar editor',()=>activePath&&closeTab(activePath)],['Reabrir editor cerrado',reopenClosedEditor]],
 edit:[['Deshacer',()=>editor?.trigger('menu','undo')],['Rehacer',()=>editor?.trigger('menu','redo')],['Mover línea arriba',()=>runEditorAction('editor.action.moveLinesUpAction')],['Mover línea abajo',()=>runEditorAction('editor.action.moveLinesDownAction')],['Duplicar línea abajo',()=>runEditorAction('editor.action.copyLinesDownAction')],['Eliminar línea',()=>runEditorAction('editor.action.deleteLines')],['Alternar comentario de línea',()=>runEditorAction('editor.action.commentLine')],['Alternar comentario de bloque',()=>runEditorAction('editor.action.blockComment')],['Buscar',()=>runEditorAction('actions.find')],['Reemplazar',()=>runEditorAction('editor.action.startFindReplaceAction')],['Buscar y reemplazar en archivos',()=>{setSideMode('search');setTimeout(()=>$('#sideReplaceInput')?.focus(),30);}],['Acción rápida',()=>runEditorAction('editor.action.quickFix')],['Cambiar nombre de símbolo',()=>runEditorAction('editor.action.rename')],['Formatear documento',()=>runEditorAction('editor.action.formatDocument')]],
 selection:[['Seleccionar todo',()=>editor?.trigger('menu','selectAll')],['Añadir cursor arriba',()=>runEditorAction('editor.action.insertCursorAbove')],['Añadir cursor abajo',()=>runEditorAction('editor.action.insertCursorBelow')],['Seleccionar siguiente coincidencia',()=>runEditorAction('editor.action.addSelectionToNextFindMatch')],['Seleccionar todas las coincidencias',()=>runEditorAction('editor.action.selectHighlights')],['Cambiar todas las ocurrencias',()=>runEditorAction('editor.action.changeAll')]],
-view:[['Modo Scratch (bloques)',()=>openScratchMode()],['Explorador',()=>setSideMode('explorer')],['Buscar',()=>setSideMode('search')],['Control de código fuente',()=>setSideMode('scm')],['Ejecutar y depurar',()=>setSideMode('run')],['Esquema (Outline)',()=>setSideMode('outline')],['Extensiones',()=>setSideMode('extensions')],['Alternar barra lateral',()=>toggleSidebar()],['Alternar panel',()=>togglePanel()],['Paleta de comandos',()=>showPalette('commands')]],
+view:[['Axiom Live Preview',toggleLivePreview],['Axiom Pulse',()=>setSideMode('pulse')],['Modo Zen',()=>toggleZenMode()],['Modo Scratch (bloques)',()=>openScratchMode()],['Explorador',()=>setSideMode('explorer')],['Buscar',()=>setSideMode('search')],['Control de código fuente',()=>setSideMode('scm')],['Ejecutar y depurar',()=>setSideMode('run')],['Esquema (Outline)',()=>setSideMode('outline')],['Extensiones',()=>setSideMode('extensions')],['Alternar barra lateral',()=>toggleSidebar()],['Alternar panel',()=>togglePanel()],['Paleta de comandos',()=>showPalette('commands')]],
 go:[['Atrás',navigateBack],['Adelante',navigateForward],['Ir al archivo...',()=>showPalette('files')],['Ir a símbolo del proyecto...',()=>showPalette('symbols')],['Ir a línea...',()=>runEditorAction('editor.action.gotoLine')],['Ir a símbolo...',()=>runEditorAction('editor.action.quickOutline')],['Ir a definición',goToDefinition],['Ver definición',peekDefinition],['Ir a referencias',showReferences],['Siguiente problema',()=>runEditorAction('editor.action.marker.next')],['Problema anterior',()=>runEditorAction('editor.action.marker.prev')]],
 run:[['Ejecutar archivo activo',runActiveFile],['Abrir Runner',openRunnerMode],['Detener ejecución',stopRunner],['Abrir vista Ejecutar y depurar',()=>setSideMode('run')]],
 terminal:[['Nueva PowerShell',()=>newTerminal('powershell')],['Nuevo Command Prompt',()=>newTerminal('cmd')],['Cerrar terminal activa',closeActiveTerminal],['Mostrar/ocultar panel',()=>togglePanel()]],
@@ -1182,7 +1384,7 @@ help:[['Buscar actualizaciones...',()=>checkForAppUpdates(true)],['Acerca de Axi
 function closeMenus(){document.querySelector('.app-menu')?.remove();$$('.menubar button').forEach(b=>b.classList.remove('menu-open'));}
 function showMenu(button,key){closeMenus();const m=document.createElement('div');m.className='app-menu';for(const [label,action] of menuModel[key]||[]){const b=document.createElement('button');b.textContent=label;b.onclick=()=>{closeMenus();action();};m.appendChild(b);}const r=button.getBoundingClientRect();m.style.left=r.left+'px';m.style.top=r.bottom+'px';document.body.appendChild(m);button.classList.add('menu-open');setTimeout(()=>document.addEventListener('pointerdown',e=>{if(!m.contains(e.target)&&e.target!==button)closeMenus();},{once:true}),0);}
 function wireMenus(){$$('.menubar [data-menu]').forEach(b=>b.onclick=e=>{e.stopPropagation();if(b.classList.contains('menu-open'))closeMenus();else showMenu(b,b.dataset.menu);});}
-function wireUI(){$('#updateBtn').onclick=()=>appUpdate?.available?installAppUpdate():checkForAppUpdates(true);$("#scratchBtn").onclick=()=>openScratchMode();$('#openBtn').onclick=openWorkspace;$('#saveBtn').onclick=saveActive;$('#refreshBtn').onclick=refreshWorkspace;$('#newFileBtn').onclick=createNewFile;$('#newFolderBtn').onclick=createNewFolder;$('#commandBtn').onclick=$('#welcomeCommand').onclick=()=>showPalette('commands');$('#explorerBtn').onclick=()=>setSideMode('explorer');$('#searchBtn').onclick=()=>setSideMode('search');$('#gitBtn').onclick=()=>setSideMode('scm');$('#runBtn').onclick=()=>setSideMode('run');$('#outlineBtn').onclick=()=>setSideMode('outline');$('#extensionsBtn').onclick=()=>setSideMode('extensions');$('#accountsBtn').onclick=()=>showInfo('Cuentas','<p>AxiomCode funciona actualmente en modo local. La sincronización de cuentas se añadirá como módulo.</p>');$('#terminalBtn').onclick=()=>{setPanelMode('terminal');if(!terminalState.sessions.size)newTerminal();};$('#closePanel').onclick=()=>togglePanel(false);$('#newTerminal').onclick=()=>newTerminal();$('#killTerminal').onclick=closeActiveTerminal;$('#problemsTab').onclick=()=>setPanelMode('problems');$('#outputTab').onclick=()=>setPanelMode('output');$('#debugTab').onclick=()=>setPanelMode('debug');$('#terminalTab').onclick=()=>setPanelMode('terminal');wireMenus();
+function wireUI(){$$('[data-starter]').forEach(b=>b.onclick=()=>createStarterProject(b.dataset.starter));$('#updateBtn').onclick=()=>appUpdate?.available?installAppUpdate():checkForAppUpdates(true);$('#previewBtn').onclick=toggleLivePreview;$('#zenBtn').onclick=()=>toggleZenMode();$("#scratchBtn").onclick=()=>openScratchMode();$('#openBtn').onclick=openWorkspace;$('#saveBtn').onclick=saveActive;$('#refreshBtn').onclick=refreshWorkspace;$('#newFileBtn').onclick=createNewFile;$('#newFolderBtn').onclick=createNewFolder;$('#commandBtn').onclick=()=>showPalette('unified');$('#welcomeCommand').onclick=()=>showPalette('commands');$('#explorerBtn').onclick=()=>setSideMode('explorer');$('#searchBtn').onclick=()=>setSideMode('search');$('#gitBtn').onclick=()=>setSideMode('scm');$('#runBtn').onclick=()=>setSideMode('run');$('#outlineBtn').onclick=()=>setSideMode('outline');$('#pulseBtn').onclick=()=>setSideMode('pulse');$('#extensionsBtn').onclick=()=>setSideMode('extensions');$('#accountsBtn').onclick=()=>showInfo('Cuentas','<p>AxiomCode funciona actualmente en modo local. La sincronización de cuentas se añadirá como módulo.</p>');$('#terminalBtn').onclick=()=>{setPanelMode('terminal');if(!terminalState.sessions.size)newTerminal();};$('#closePanel').onclick=()=>togglePanel(false);$('#newTerminal').onclick=()=>newTerminal();$('#killTerminal').onclick=closeActiveTerminal;$('#problemsTab').onclick=()=>setPanelMode('problems');$('#outputTab').onclick=()=>setPanelMode('output');$('#debugTab').onclick=()=>setPanelMode('debug');$('#terminalTab').onclick=()=>setPanelMode('terminal');$('#previewRefresh').onclick=refreshLivePreviewFrame;$('#previewClose').onclick=closeLivePreview;$('#previewExternal').onclick=async()=>{if(livePreviewState.id)try{await window.axiom.openLivePreviewExternal(livePreviewState.id);}catch(e){setStatus('Preview: '+e.message);}};$$('[data-preview-device]').forEach(b=>b.onclick=()=>setPreviewDevice(b.dataset.previewDevice));wireMenus();
 $('#terminalInput').addEventListener('keydown',e=>{const t=terminalState.sessions.get(terminalState.active);if(e.key==='Enter')execPersistentTerminal(e.target.value);else if(e.key==='ArrowUp'&&t){e.preventDefault();if(t.historyPos>0)e.target.value=t.history[--t.historyPos]||'';}else if(e.key==='ArrowDown'&&t){e.preventDefault();if(t.historyPos<t.history.length-1)e.target.value=t.history[++t.historyPos]||'';else{t.historyPos=t.history.length;e.target.value='';}}});
 $('#paletteInput').oninput=e=>buildPalette(e.target.value);$('#overlay').onclick=e=>{if(e.target===$('#overlay'))hidePalette();};$('#paletteInput').onkeydown=e=>{if(e.key==='Escape')hidePalette();if(e.key==='Enter'&&paletteItems[0]){hidePalette();paletteItems[0].run();}};}
 function runPreferenceCommand(id){
@@ -1198,12 +1400,15 @@ function runPreferenceCommand(id){
     'workbench.action.navigateForward':navigateForward,
     'workbench.action.nextEditor':()=>cycleEditor(1),
     'workbench.action.previousEditor':()=>cycleEditor(-1),
+    'axiom.action.livePreview':toggleLivePreview,
+    'workbench.action.toggleZenMode':()=>toggleZenMode(),
     'workbench.action.files.openFile':openFiles,
     'workbench.action.files.save':saveActive,
     'workbench.view.explorer':()=>setSideMode('explorer'),
     'workbench.view.search':()=>setSideMode('search'),
     'workbench.view.scm':()=>setSideMode('scm'),
     'workbench.view.outline':()=>setSideMode('outline'),
+    'workbench.view.pulse':()=>setSideMode('pulse'),
     'workbench.view.extensions':()=>setSideMode('extensions'),
     'workbench.action.toggleSidebarVisibility':()=>toggleSidebar(),
     'workbench.action.togglePanel':()=>togglePanel(),
@@ -1212,7 +1417,7 @@ function runPreferenceCommand(id){
   };
   actions[id]?.();
 }
-function setupShortcuts(){window.addEventListener('keydown',e=>{if(window.AxiomPreferences?.handleKeydown(e))return;const ctrl=e.ctrlKey||e.metaKey,k=e.key.toLowerCase();if(ctrl&&e.shiftKey&&k==='t'){e.preventDefault();reopenClosedEditor();}else if(ctrl&&k==='tab'){e.preventDefault();cycleEditor(e.shiftKey?-1:1);}else if(e.altKey&&!ctrl&&!e.shiftKey&&e.key==='ArrowLeft'){e.preventDefault();navigateBack();}else if(e.altKey&&!ctrl&&!e.shiftKey&&e.key==='ArrowRight'){e.preventDefault();navigateForward();}else if(ctrl&&k==='s'&&!e.shiftKey){e.preventDefault();saveActive();}else if(ctrl&&e.shiftKey&&k==='s'){e.preventDefault();saveAll();}else if(ctrl&&k==='o'){e.preventDefault();openFiles();}else if(ctrl&&k==='w'){e.preventDefault();if(activePath)closeTab(activePath);}else if(ctrl&&!e.shiftKey&&k==='p'){e.preventDefault();showPalette('files');}else if(ctrl&&!e.shiftKey&&k==='t'){e.preventDefault();showPalette('symbols');}else if(ctrl&&e.shiftKey&&k==='p'){e.preventDefault();showPalette('commands');}else if(ctrl&&e.shiftKey&&k==='e'){e.preventDefault();setSideMode('explorer');}else if(ctrl&&e.shiftKey&&k==='f'){e.preventDefault();setSideMode('search');}else if(ctrl&&e.shiftKey&&k==='h'){e.preventDefault();setSideMode('search');setTimeout(()=>$('#sideReplaceInput')?.focus(),30);}else if(ctrl&&!e.shiftKey&&k==='r'){e.preventDefault();showRecentWorkspaces();}else if(ctrl&&e.shiftKey&&k==='o'){e.preventDefault();runEditorAction('editor.action.quickOutline');}else if(ctrl&&e.shiftKey&&k==='g'){e.preventDefault();setSideMode('scm');}else if(ctrl&&e.shiftKey&&k==='x'){e.preventDefault();setSideMode('extensions');}else if(ctrl&&k==='b'){e.preventDefault();toggleSidebar();}else if(ctrl&&k==='j'){e.preventDefault();togglePanel();}else if(ctrl&&e.key==='`'){e.preventDefault();setPanelMode('terminal');if(!terminalState.sessions.size)newTerminal();}else if(e.key==='F2'){e.preventDefault();runEditorAction('editor.action.rename');}else if(e.key==='F8'&&!e.shiftKey){e.preventDefault();runEditorAction('editor.action.marker.next');}else if(e.key==='F8'&&e.shiftKey){e.preventDefault();runEditorAction('editor.action.marker.prev');}else if(e.key==='F12'&&!e.shiftKey&&!e.altKey){e.preventDefault();goToDefinition();}else if(e.key==='F12'&&e.shiftKey){e.preventDefault();showReferences();}else if(e.key==='F12'&&e.altKey){e.preventDefault();peekDefinition();}else if(e.key==='F5'){e.preventDefault();runActiveFile();}else if(e.key==='Escape'){hidePalette();closeMenus();}});}
+function setupShortcuts(){window.addEventListener('keydown',e=>{if(window.AxiomPreferences?.handleKeydown(e))return;const ctrl=e.ctrlKey||e.metaKey,k=e.key.toLowerCase();if(ctrl&&e.altKey&&k==='v'){e.preventDefault();toggleLivePreview();}else if(ctrl&&e.altKey&&k==='p'){e.preventDefault();setSideMode('pulse');}else if(ctrl&&e.altKey&&k==='z'){e.preventDefault();toggleZenMode();}else if(ctrl&&e.shiftKey&&k==='t'){e.preventDefault();reopenClosedEditor();}else if(ctrl&&k==='tab'){e.preventDefault();cycleEditor(e.shiftKey?-1:1);}else if(e.altKey&&!ctrl&&!e.shiftKey&&e.key==='ArrowLeft'){e.preventDefault();navigateBack();}else if(e.altKey&&!ctrl&&!e.shiftKey&&e.key==='ArrowRight'){e.preventDefault();navigateForward();}else if(ctrl&&k==='s'&&!e.shiftKey){e.preventDefault();saveActive();}else if(ctrl&&e.shiftKey&&k==='s'){e.preventDefault();saveAll();}else if(ctrl&&k==='o'){e.preventDefault();openFiles();}else if(ctrl&&k==='w'){e.preventDefault();if(activePath)closeTab(activePath);}else if(ctrl&&!e.shiftKey&&k==='p'){e.preventDefault();showPalette('files');}else if(ctrl&&!e.shiftKey&&k==='t'){e.preventDefault();showPalette('symbols');}else if(ctrl&&e.shiftKey&&k==='p'){e.preventDefault();showPalette('commands');}else if(ctrl&&e.shiftKey&&k==='e'){e.preventDefault();setSideMode('explorer');}else if(ctrl&&e.shiftKey&&k==='f'){e.preventDefault();setSideMode('search');}else if(ctrl&&e.shiftKey&&k==='h'){e.preventDefault();setSideMode('search');setTimeout(()=>$('#sideReplaceInput')?.focus(),30);}else if(ctrl&&!e.shiftKey&&k==='r'){e.preventDefault();showRecentWorkspaces();}else if(ctrl&&e.shiftKey&&k==='o'){e.preventDefault();runEditorAction('editor.action.quickOutline');}else if(ctrl&&e.shiftKey&&k==='g'){e.preventDefault();setSideMode('scm');}else if(ctrl&&e.shiftKey&&k==='x'){e.preventDefault();setSideMode('extensions');}else if(ctrl&&k==='b'){e.preventDefault();toggleSidebar();}else if(ctrl&&k==='j'){e.preventDefault();togglePanel();}else if(ctrl&&e.key==='`'){e.preventDefault();setPanelMode('terminal');if(!terminalState.sessions.size)newTerminal();}else if(e.key==='F2'){e.preventDefault();runEditorAction('editor.action.rename');}else if(e.key==='F8'&&!e.shiftKey){e.preventDefault();runEditorAction('editor.action.marker.next');}else if(e.key==='F8'&&e.shiftKey){e.preventDefault();runEditorAction('editor.action.marker.prev');}else if(e.key==='F12'&&!e.shiftKey&&!e.altKey){e.preventDefault();goToDefinition();}else if(e.key==='F12'&&e.shiftKey){e.preventDefault();showReferences();}else if(e.key==='F12'&&e.altKey){e.preventDefault();peekDefinition();}else if(e.key==='F5'){e.preventDefault();runActiveFile();}else if(e.key==='Escape'){hidePalette();closeMenus();if(zenMode)toggleZenMode(false);}});}
 async function setupSettings(){
   return window.AxiomPreferences?.init({
     getEditor:()=>editor,
@@ -1239,7 +1444,7 @@ require(['vs/editor/editor.main'],async()=>{
 await iconsReady;
 monaco.editor.defineTheme('axiom-vscode-dark',{base:'vs-dark',inherit:true,rules:[{token:'comment',foreground:'6A9955'},{token:'keyword',foreground:'C586C0'},{token:'string',foreground:'CE9178'},{token:'number',foreground:'B5CEA8'},{token:'type',foreground:'4EC9B0'}],colors:{'editor.background':'#1F1F1F','editor.foreground':'#CCCCCC','editorLineNumber.foreground':'#6E7681','editorLineNumber.activeForeground':'#CCCCCC','editorCursor.foreground':'#AEAFAD','editor.selectionBackground':'#264F78','editor.inactiveSelectionBackground':'#3A3D41','editorIndentGuide.background1':'#404040','editorIndentGuide.activeBackground1':'#707070','editorWidget.background':'#202020','editorWidget.border':'#454545','editorSuggestWidget.background':'#202020','editorSuggestWidget.border':'#454545','editorSuggestWidget.selectedBackground':'#04395E'}});
 editor=monaco.editor.create($('#editor'),{theme:'axiom-vscode-dark',automaticLayout:true,fontFamily:'Cascadia Code, Consolas, monospace',fontLigatures:true,fontSize:14,lineHeight:21,minimap:{enabled:true,scale:1},smoothScrolling:true,cursorSmoothCaretAnimation:'on',bracketPairColorization:{enabled:true},guides:{bracketPairs:true,indentation:true},wordWrap:'off',renderWhitespace:'selection',padding:{top:5,bottom:5},scrollBeyondLastLine:false,stickyScroll:{enabled:true},formatOnPaste:false,formatOnType:false});
-editor.onDidChangeModelContent(()=>{if(!activePath)return;const t=tabs.get(activePath);if(t&&!t.dirty){t.dirty=true;renderTabs();}clearTimeout(autoSaveTimer);if(window.AxiomPreferences?.getSetting('files.autoSave')==='afterDelay'){const delay=Math.max(100,Number(window.AxiomPreferences.getSetting('files.autoSaveDelay'))||1000);autoSaveTimer=setTimeout(()=>{if(activePath&&tabs.get(activePath)?.dirty)saveActive();},delay);}});
+editor.onDidChangeModelContent(()=>{if(!activePath)return;const t=tabs.get(activePath);if(t&&!t.dirty){t.dirty=true;renderTabs();}scheduleLivePreviewUpdate();clearTimeout(autoSaveTimer);if(window.AxiomPreferences?.getSetting('files.autoSave')==='afterDelay'){const delay=Math.max(100,Number(window.AxiomPreferences.getSetting('files.autoSaveDelay'))||1000);autoSaveTimer=setTimeout(()=>{if(activePath&&tabs.get(activePath)?.dirty)saveActive();},delay);}});
 editor.onDidChangeCursorPosition(e=>{$('#cursorPos').textContent=`Ln ${e.position.lineNumber}, Col ${e.position.column}`;});
 try{
   monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({noSyntaxValidation:false,noSemanticValidation:false,noSuggestionDiagnostics:false});
@@ -1252,7 +1457,7 @@ monaco.editor.onDidChangeMarkers(()=>{updateProblemBadge();if(panelMode==='probl
 editor.onDidChangeModel(()=>{const model=editor.getModel();if(model)scheduleModelDiagnostics(model,30);updateProblemBadge();if(panelMode==='problems')renderPanelContent();if(sideMode==='outline')renderSideView();});
 editor.addAction({id:'axiom.save',label:'Guardar archivo',keybindings:[monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS],run:saveActive});
 editor.addAction({id:'axiom.problems',label:'Mostrar problemas',keybindings:[monaco.KeyMod.CtrlCmd|monaco.KeyMod.Shift|monaco.KeyCode.KeyM],run:()=>setPanelMode('problems')});
-wireUI();setupShortcuts();await setupSettings();await refreshExtensionState();renderSideView();renderTabs();showCode(false);const restored=await window.axiom.restoreWorkspace();if(restored)useWorkspace(restored,true);else setStatus('AxiomCode listo');logOutput('Workbench iniciado');renderUpdateButton();if(window.AxiomPreferences?.getSetting('update.autoCheck')!==false){setTimeout(()=>checkForAppUpdates(false),1500);setInterval(()=>checkForAppUpdates(false),4*60*60*1000);}
+wireUI();setupShortcuts();await setupSettings();await refreshExtensionState();renderSideView();renderTabs();renderWelcomeRecents();showCode(false);const restored=await window.axiom.restoreWorkspace();if(restored)useWorkspace(restored,true);else setStatus('AxiomCode listo');logOutput('Workbench iniciado');renderUpdateButton();if(window.AxiomPreferences?.getSetting('update.autoCheck')!==false){setTimeout(()=>checkForAppUpdates(false),1500);setInterval(()=>checkForAppUpdates(false),4*60*60*1000);}
 window.axiom.rendererReady({monaco:true,materialIcons:Object.keys(iconManifest?.iconDefinitions||{}).length,ui:'vscode-dark-modern',views:['explorer','search','scm','run','extensions'],menus:true});
 if(new URLSearchParams(location.search).has('scratch'))openScratchMode();
 });
