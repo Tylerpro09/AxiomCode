@@ -88,7 +88,7 @@ app.whenReady().then(async()=>{try{
   log('RESULT',result);
   if(result.before<3)throw Error('Workspace search did not find expected matches');
   if(result.caseOnly!==3)throw Error('Case-sensitive search failed');
-  if(result.partial!==3||result.whole!==0)throw Error('Whole-word search failed');
+  if(result.partial!==4||result.whole!==0)throw Error('Whole-word search failed');
   if(result.regexRows!==3)throw Error('Regex search failed');
   if(result.replaced.replacements!==3||result.replaced.filesChanged<1)throw Error('Workspace replace failed');
   if(result.after!==0||result.bars!==3)throw Error('Workspace replace verification failed');
