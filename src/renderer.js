@@ -134,6 +134,48 @@ const filesOf=nodes=>nodes.flatMap(n=>n.type==='file'?[n]:filesOf(n.children||[]
 const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const setStatus=t=>{$('#statusMessage').textContent=t;};
 const logOutput=t=>{outputLog.push(`[${new Date().toLocaleTimeString()}] ${t}`);if(panelMode==='output')renderPanelContent();};
+const normalizeSlash=p=>String(p||'').replace(/\\/g,'/');
+const relativeToWorkspace=p=>{if(!workspace?.root)return basename(p);const root=normalizeSlash(workspace.root).replace(/\/$/,'');const full=normalizeSlash(p);return full.toLowerCase().startsWith((root+'/').toLowerCase())?full.slice(root.length+1):full;};
+async function runEditorAction(id){
+  const action=editor?.getAction(id);
+  if(!action)return setStatus('Acción no disponible: '+id);
+  try{await action.run();}catch(e){showInfo('Editor','<p>'+escapeHtml(e.message)+'</p>');}
+}
+function renderBreadcrumbs(){
+  const host=$('.breadcrumbs');if(!host)return;
+  host.innerHTML='';
+  if(!activePath){
+    host.innerHTML='<span class="codicon codicon-folder"></span><span>'+(workspace?escapeHtml(basename(workspace.root)):'AxiomCode')+'</span>';
+    return;
+  }
+  const rel=relativeToWorkspace(activePath),parts=normalizeSlash(rel).split('/').filter(Boolean);
+  const root=workspace?.root||dirname(activePath);
+  const rootBtn=document.createElement('button');rootBtn.className='breadcrumb-item';rootBtn.innerHTML='<span class="codicon codicon-folder"></span>'+escapeHtml(workspace?basename(workspace.root):basename(root));rootBtn.onclick=()=>workspace&&window.axiom.reveal(workspace.root);host.appendChild(rootBtn);
+  let current=root;
+  for(let i=0;i<parts.length;i++){
+    const sep=document.createElement('span');sep.className='codicon codicon-chevron-right breadcrumb-sep';host.appendChild(sep);
+    current=join(current,parts[i]);
+    const btn=document.createElement('button');btn.className='breadcrumb-item'+(i===parts.length-1?' current':'');btn.textContent=parts[i];
+    const target=current;
+    btn.onclick=()=>i===parts.length-1?editor?.focus():window.axiom.reveal(target);
+    host.appendChild(btn);
+  }
+}
+async function showRecentWorkspaces(){
+  const recent=await window.axiom.recentWorkspaces();
+  if(!recent?.length)return showInfo('Abrir reciente','<p>No hay carpetas recientes.</p>');
+  const back=document.createElement('div');back.className='quick-dialog-backdrop';
+  const box=document.createElement('div');box.className='quick-dialog recent-workspaces';
+  box.innerHTML='<h3>Abrir reciente</h3><div class="recent-list"></div><button class="recent-cancel">Cancelar</button>';
+  const list=box.querySelector('.recent-list');
+  for(const p of recent){
+    const b=document.createElement('button');b.className='recent-row';b.innerHTML='<b>'+escapeHtml(basename(p))+'</b><span>'+escapeHtml(p)+'</span>';
+    b.onclick=async()=>{back.remove();try{useWorkspace(await window.axiom.openWorkspacePath(p),false);}catch(e){showInfo('Abrir reciente','<p>'+escapeHtml(e.message)+'</p>');}};
+    list.appendChild(b);
+  }
+  box.querySelector('.recent-cancel').onclick=()=>back.remove();
+  back.appendChild(box);document.body.appendChild(back);
+}
 function askInput(title,initial=''){return new Promise(resolve=>{const back=document.createElement('div');back.className='quick-dialog-backdrop';back.innerHTML=`<div class="quick-dialog"><label>${escapeHtml(title)}</label><input autocomplete="off"></div>`;const input=back.querySelector('input');input.value=initial;const done=v=>{back.remove();resolve(v);};input.onkeydown=e=>{if(e.key==='Enter')done(input.value);else if(e.key==='Escape')done(null);};back.onclick=e=>{if(e.target===back)done(null);};document.body.appendChild(back);input.focus();input.select();});}
 function showInfo(title,html){const back=document.createElement('div');back.className='quick-dialog-backdrop';back.innerHTML=`<div class="quick-dialog info-dialog"><h3>${escapeHtml(title)}</h3><div>${html}</div><button>Aceptar</button></div>`;back.querySelector('button').onclick=()=>back.remove();back.onclick=e=>{if(e.target===back)back.remove();};document.body.appendChild(back);}
 function renderUpdateButton(){
@@ -181,21 +223,39 @@ function fileIconId(name){if(!iconManifest)return'file';const exact=iconManifest
 function folderIconId(name,open){if(!iconManifest)return open?'folder-open':'folder';const map=open?iconManifest.folderNamesExpanded:iconManifest.folderNames,low=name.toLowerCase();return map?.[name]||map?.[low]||(open?iconManifest.folderExpanded:iconManifest.folder)||'folder';}
 const iconHtml=id=>`<img class="theme-icon" draggable="false" src="${iconSrc(id)}">`;
 function showCode(on){$('#welcome').style.display=on?'none':'flex';$('#editor').style.display=on?'block':'none';}
-function renderTabs(){const host=$('#tabs');host.innerHTML='';if(!tabs.size){host.innerHTML='<div class="welcome-tab">Inicio</div>';return;}tabs.forEach((t,p)=>{const el=document.createElement('div');el.className='tab'+(p===activePath?' active':'');el.title=p;el.innerHTML=`${iconHtml(fileIconId(basename(p)))}<span class="tab-name">${escapeHtml(basename(p))}</span>${t.dirty?'<span class="dirty">●</span>':''}<button class="tab-close" aria-label="Cerrar">×</button>`;el.onclick=e=>{if(!e.target.closest('.tab-close'))activate(p);};el.onauxclick=e=>{if(e.button===1)closeTab(p);};el.querySelector('.tab-close').onclick=e=>{e.stopPropagation();closeTab(p);};host.appendChild(el);});}
+function showTabContextMenu(x,y,p){
+  document.querySelector('.context-menu')?.remove();
+  const keys=[...tabs.keys()],index=keys.indexOf(p);
+  const m=document.createElement('div');m.className='context-menu';
+  m.innerHTML='<button data-a="close">Cerrar</button><button data-a="others">Cerrar otros</button><button data-a="right">Cerrar a la derecha</button><div></div><button data-a="copy">Copiar ruta</button><button data-a="copyrel">Copiar ruta relativa</button><button data-a="reveal">Mostrar en Explorador</button>';
+  m.style.left=x+'px';m.style.top=y+'px';
+  m.onclick=async e=>{
+    const a=e.target.dataset.a;if(!a)return;
+    if(a==='close')closeTab(p);
+    if(a==='others')for(const key of [...tabs.keys()])if(key!==p)closeTab(key);
+    if(a==='right')for(const key of keys.slice(index+1))closeTab(key);
+    if(a==='copy')await window.axiom.clipboardWrite(p);
+    if(a==='copyrel')await window.axiom.clipboardWrite(relativeToWorkspace(p));
+    if(a==='reveal')window.axiom.reveal(p);
+    m.remove();
+  };
+  document.body.appendChild(m);setTimeout(()=>document.addEventListener('click',()=>m.remove(),{once:true}),0);
+}
+function renderTabs(){const host=$('#tabs');host.innerHTML='';if(!tabs.size){host.innerHTML='<div class="welcome-tab">Inicio</div>';return;}tabs.forEach((t,p)=>{const el=document.createElement('div');el.className='tab'+(p===activePath?' active':'');el.title=p;el.innerHTML=`${iconHtml(fileIconId(basename(p)))}<span class="tab-name">${escapeHtml(basename(p))}</span>${t.dirty?'<span class="dirty">●</span>':''}<button class="tab-close" aria-label="Cerrar">×</button>`;el.onclick=e=>{if(!e.target.closest('.tab-close'))activate(p);};el.onauxclick=e=>{if(e.button===1)closeTab(p);};el.oncontextmenu=e=>{e.preventDefault();showTabContextMenu(e.clientX,e.clientY,p);};el.querySelector('.tab-close').onclick=e=>{e.stopPropagation();closeTab(p);};host.appendChild(el);});}
 async function openFile(p,line){if(/\.(axiomscratch|sb3|sb2|sb)$/i.test(p))return openScratchMode(p);try{if(!tabs.has(p)){const r=await window.axiom.readFile(p);tabs.set(p,{model:monaco.editor.createModel(r.content,fileLang(p),monaco.Uri.file(p)),dirty:false});}activate(p);if(line){editor.revealLineInCenter(line);editor.setPosition({lineNumber:line,column:1});}}catch(e){setStatus('No se pudo abrir: '+e.message);logOutput(e.message);}}
 async function openFiles(){const paths=await window.axiom.openFiles(workspace?.root);for(const p of paths||[])await openFile(p);}
-function activate(p){window.AxiomScratch?.hide();const t=tabs.get(p);if(!t)return;activePath=p;editor.setModel(t.model);showCode(true);renderTabs();$('#language').textContent=fileLang(p);$('#breadcrumbText').textContent=(workspace?basename(workspace.root)+'  >  ':'')+basename(p);editor.focus();setStatus(p);if(sideMode==='explorer')renderSideView();}
-function closeTab(p){const t=tabs.get(p);if(!t)return;if(t.dirty&&!confirm(`Hay cambios sin guardar en ${basename(p)}. ¿Cerrar?`))return;t.model.dispose();tabs.delete(p);if(activePath===p){activePath=[...tabs.keys()].pop()||null;if(activePath)activate(activePath);else{showCode(false);$('#breadcrumbText').textContent=workspace?basename(workspace.root):'AxiomCode';}}renderTabs();}
+function activate(p){window.AxiomScratch?.hide();const t=tabs.get(p);if(!t)return;activePath=p;editor.setModel(t.model);showCode(true);renderTabs();$('#language').textContent=fileLang(p);renderBreadcrumbs();editor.focus();setStatus(p);if(sideMode==='explorer')renderSideView();}
+function closeTab(p){const t=tabs.get(p);if(!t)return;if(t.dirty&&!confirm(`Hay cambios sin guardar en ${basename(p)}. ¿Cerrar?`))return;t.model.dispose();tabs.delete(p);if(activePath===p){activePath=[...tabs.keys()].pop()||null;if(activePath)activate(activePath);else{showCode(false);renderBreadcrumbs();}}renderTabs();}
 async function saveActive(){if(window.AxiomScratch?.visible)return window.AxiomScratch.save();if(!activePath)return;const t=tabs.get(activePath);await window.axiom.writeFile(activePath,t.model.getValue());t.dirty=false;renderTabs();setStatus('Guardado '+basename(activePath));logOutput('Guardado '+activePath);if(activePath===window.AxiomPreferences?.state?.settingsPath)await window.AxiomPreferences.reloadFromDisk();}
 async function saveAll(){if(window.AxiomScratch?.visible)await window.AxiomScratch.save();for(const [p,t] of tabs){if(t.dirty){await window.axiom.writeFile(p,t.model.getValue());t.dirty=false;}}renderTabs();setStatus('Todos los archivos guardados');}
-function useWorkspace(w,restored=false){if(!w)return;workspace=w;$('#workspaceName').textContent=basename(w.root).toUpperCase();$('#breadcrumbText').textContent=basename(w.root);sideMode='explorer';renderSideView();setStatus((restored?'Proyecto restaurado: ':'Proyecto: ')+w.root);logOutput((restored?'Carpeta restaurada: ':'Carpeta abierta: ')+w.root);updateGit();window.AxiomPreferences?.onWorkspaceChanged();}
+function useWorkspace(w,restored=false){if(!w)return;workspace=w;$('#workspaceName').textContent=basename(w.root).toUpperCase();renderBreadcrumbs();sideMode='explorer';renderSideView();setStatus((restored?'Proyecto restaurado: ':'Proyecto: ')+w.root);logOutput((restored?'Carpeta restaurada: ':'Carpeta abierta: ')+w.root);updateGit();window.AxiomPreferences?.onWorkspaceChanged();}
 async function openWorkspace(){const w=await window.axiom.openWorkspace();if(w)useWorkspace(w,false);}
 async function refreshWorkspace(){if(!workspace)return;workspace=await window.axiom.refreshWorkspace(workspace.root);renderSideView();setStatus('Explorador actualizado');}
 async function createNewFile(){if(!workspace)return setStatus('Primero abre una carpeta');const name=await askInput('Nombre del nuevo archivo:');if(!name)return;try{const p=join(workspace.root,name);await window.axiom.createFile(p,false);await refreshWorkspace();openFile(p);}catch(e){showInfo('Error',escapeHtml(e.message));}}
 async function createNewFolder(){if(!workspace)return setStatus('Primero abre una carpeta');const name=await askInput('Nombre de la nueva carpeta:');if(!name)return;try{await window.axiom.createFile(join(workspace.root,name),true);await refreshWorkspace();}catch(e){showInfo('Error',escapeHtml(e.message));}}
 async function renamePath(p){const name=await askInput('Nuevo nombre:',basename(p));if(!name||name===basename(p))return;const to=join(dirname(p),name);await window.axiom.renameFile(p,to);if(tabs.has(p)){const t=tabs.get(p);tabs.delete(p);tabs.set(to,t);if(activePath===p)activePath=to;}await refreshWorkspace();renderTabs();}
 async function deletePath(p){if(!confirm(`¿Eliminar ${basename(p)}?`))return;await window.axiom.deleteFile(p);if(tabs.has(p))closeTab(p);await refreshWorkspace();}
-function showContextMenu(x,y,p){document.querySelector('.context-menu')?.remove();const m=document.createElement('div');m.className='context-menu';m.innerHTML='<button data-a="rename">Cambiar nombre</button><button data-a="reveal">Mostrar en Explorador</button><div></div><button data-a="delete" class="danger">Eliminar</button>';m.style.left=x+'px';m.style.top=y+'px';m.onclick=async e=>{const a=e.target.dataset.a;if(a==='rename')await renamePath(p);if(a==='reveal')window.axiom.reveal(p);if(a==='delete')await deletePath(p);m.remove();};document.body.appendChild(m);setTimeout(()=>document.addEventListener('click',()=>m.remove(),{once:true}),0);}
+function showContextMenu(x,y,p){document.querySelector('.context-menu')?.remove();const m=document.createElement('div');m.className='context-menu';m.innerHTML='<button data-a="open">Abrir</button><button data-a="rename">Cambiar nombre</button><button data-a="copy">Copiar ruta</button><button data-a="copyrel">Copiar ruta relativa</button><button data-a="reveal">Mostrar en Explorador</button><div></div><button data-a="delete" class="danger">Eliminar</button>';m.style.left=x+'px';m.style.top=y+'px';m.onclick=async e=>{const a=e.target.dataset.a;if(a==='open')await openFile(p);if(a==='rename')await renamePath(p);if(a==='copy')await window.axiom.clipboardWrite(p);if(a==='copyrel')await window.axiom.clipboardWrite(relativeToWorkspace(p));if(a==='reveal')window.axiom.reveal(p);if(a==='delete')await deletePath(p);m.remove();};document.body.appendChild(m);setTimeout(()=>document.addEventListener('click',()=>m.remove(),{once:true}),0);}
 function renderExplorer(host){if(!workspace){host.innerHTML='<div class="empty-state">Todavía no has abierto una carpeta.<button id="welcomeOpenSide">Abrir carpeta</button></div>';$('#welcomeOpenSide').onclick=openWorkspace;return;}const draw=(nodes,depth)=>nodes.forEach(n=>{const open=n.type==='dir'&&n._open!==false,id=n.type==='dir'?folderIconId(n.name,open):fileIconId(n.name),row=document.createElement('div');row.className='tree-row'+(n.path===activePath?' selected':'');row.style.paddingLeft=(5+depth*13)+'px';row.innerHTML=`<span class="chev">${n.type==='dir'?`<span class="codicon codicon-chevron-${open?'down':'right'}"></span>`:''}</span><span class="icon-wrap">${iconHtml(id)}</span><span>${escapeHtml(n.name)}</span>`;row.onclick=()=>{if(n.type==='dir'){n._open=n._open===false;renderSideView();}else openFile(n.path);};row.oncontextmenu=e=>{e.preventDefault();showContextMenu(e.clientX,e.clientY,n.path);};host.appendChild(row);if(open)draw(n.children||[],depth+1);});draw(workspace.tree,0);}
 function renderSearch(host){host.innerHTML='<div class="side-search"><div class="side-input"><span class="codicon codicon-search"></span><input id="sideSearchInput" placeholder="Buscar"></div><div id="sideSearchResults" class="side-results"></div></div>';const input=$('#sideSearchInput'),results=$('#sideSearchResults');let timer;const run=()=>{clearTimeout(timer);timer=setTimeout(async()=>{const q=input.value.trim();results.innerHTML='';if(!q||!workspace)return;results.innerHTML='<div class="view-note">Buscando...</div>';const rows=await window.axiom.searchWorkspace(workspace.root,q);results.innerHTML='';if(!rows.length)results.innerHTML='<div class="view-note">Sin resultados</div>';for(const r of rows){const d=document.createElement('button');d.className='search-result';d.innerHTML=`<b>${escapeHtml(basename(r.path))}:${r.line}</b><span>${escapeHtml(r.text)}</span>`;d.onclick=()=>openFile(r.path,r.line);results.appendChild(d);}},180);};input.oninput=run;input.focus();}
 function parseChanges(text){return String(text||'').split(/\r?\n/).filter(Boolean).map(line=>({code:line.slice(0,2).trim()||'M',path:line.slice(3)}));}
