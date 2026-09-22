@@ -49,6 +49,9 @@ app.whenReady().then(async()=>{try{
     await peekDefinition();
     const peekVisible=Boolean(document.querySelector('.definition-preview'));
     document.querySelector('.quick-dialog-backdrop')?.remove();
+    setSideMode('outline');
+    await new Promise(r=>setTimeout(r,300));
+    const outlineRows=[...document.querySelectorAll('.outline-row')].map(x=>x.textContent.trim());
     const commandNames=commands.map(x=>x.name);
     return {
       before:before.length,
@@ -63,6 +66,7 @@ app.whenReady().then(async()=>{try{
       definitionPos,
       references:references?.length||0,
       peekVisible,
+      outlineRows,
       commandCoverage:[
         'Editor: Ir a definición','Editor: Ver definición','Editor: Ir a referencias',
         'Editor: Cambiar nombre de símbolo','Editor: Acción rápida','Editor: Ir a símbolo...',
@@ -82,6 +86,7 @@ app.whenReady().then(async()=>{try{
   if(result.definitionPos?.lineNumber!==1)throw Error('Go to definition failed');
   if(result.references<2)throw Error('References lookup failed');
   if(!result.peekVisible)throw Error('Peek definition preview failed');
+  if(!result.outlineRows?.some(x=>/alphaSymbol/.test(x)))throw Error('Outline view failed');
   if(!result.commandCoverage)throw Error('Command palette coverage missing');
   log('PASS search/replace, recent workspaces, breadcrumbs, editor navigation/actions');
   finish(0);
