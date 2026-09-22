@@ -272,11 +272,181 @@ async function updateGit(){if(!workspace)return;const r=await window.axiom.gitSt
 function fitActiveTerminal(){const t=terminalState.sessions.get(terminalState.active);if(!t?.fit||panelMode!=='terminal')return;requestAnimationFrame(()=>{try{t.fit.fit();window.axiom.resizeTerminal(t.id,t.term.cols,t.term.rows);}catch{}});}
 function togglePanel(force){const p=$('#panel'),open=force??!p.classList.contains('open');p.classList.toggle('open',open);if(open&&panelMode==='terminal')renderActiveTerminal();setTimeout(()=>{editor?.layout();fitActiveTerminal();},40);}
 function setPanelMode(mode){panelMode=mode;togglePanel(true);$$('.panel-title-strip>button').forEach(b=>b.classList.remove('active'));const ids={problems:'#problemsTab',output:'#outputTab',debug:'#debugTab',terminal:'#terminalTab'};$(ids[mode])?.classList.add('active');renderPanelContent();}
+const AXIOM_DIAGNOSTIC_OWNER='axiom-problems';
+const diagnosticTimers=new Map();
+function flattenTsDiagnosticMessage(message){
+  if(typeof message==='string')return message;
+  const parts=[];let node=message;
+  while(node){
+    if(node.messageText)parts.push(String(node.messageText));
+    node=Array.isArray(node.next)?node.next[0]:null;
+  }
+  return parts.join(' ')||'Problema de TypeScript';
+}
+function tsDiagnosticMarker(model,diag){
+  const startOffset=Math.max(0,Number(diag.start)||0);
+  const length=Math.max(1,Number(diag.length)||1);
+  const start=model.getPositionAt(startOffset);
+  const end=model.getPositionAt(Math.min(model.getValueLength(),startOffset+length));
+  const category=Number(diag.category);
+  const severity=category===1?monaco.MarkerSeverity.Error:category===0?monaco.MarkerSeverity.Warning:category===2?monaco.MarkerSeverity.Hint:monaco.MarkerSeverity.Info;
+  return {
+    severity,
+    message:flattenTsDiagnosticMessage(diag.messageText),
+    source:model.getLanguageId()==='typescript'?'TypeScript':'JavaScript',
+    code:diag.code!==undefined?String(diag.code):undefined,
+    startLineNumber:start.lineNumber,startColumn:start.column,
+    endLineNumber:end.lineNumber,endColumn:Math.max(end.column,start.column+1)
+  };
+}
+function lspDiagnosticMarker(diag,source='Language Service'){
+  const range=diag&&diag.range||{};
+  const start=range.start||{line:0,character:0},end=range.end||start;
+  const sev=Number(diag&&diag.severity);
+  const severity=sev===1?monaco.MarkerSeverity.Error:sev===2?monaco.MarkerSeverity.Warning:sev===4?monaco.MarkerSeverity.Hint:monaco.MarkerSeverity.Info;
+  return {
+    severity,
+    message:String(diag&&diag.message||'Problema detectado'),
+    source:String(diag&&diag.source||source),
+    code:diag&&diag.code!==undefined?String(diag.code):undefined,
+    startLineNumber:Number(start.line||0)+1,startColumn:Number(start.character||0)+1,
+    endLineNumber:Number(end.line||start.line||0)+1,endColumn:Number(end.character||start.character||0)+1
+  };
+}
+function structuralDiagnostics(model){
+  const language=model.getLanguageId();
+  if(language==='plaintext'||language==='markdown')return [];
+  const text=model.getValue(),markers=[],stack=[];
+  const openToClose={'(':')','[':']','{':'}'};
+  const closeToOpen={')':'(',']':'[','}':'{'};
+  let line=1,column=1,quote=null,escape=false,lineComment=false,blockComment=false;
+  const cStyle=new Set(['javascript','typescript','java','c','cpp','csharp','go','rust','php','css','scss']);
+  const hashStyle=new Set(['python','shell','powershell','yaml']);
+  const pushMarker=(message,l,col)=>markers.push({
+    severity:monaco.MarkerSeverity.Error,message,source:'Axiom Syntax',
+    startLineNumber:l,startColumn:col,endLineNumber:l,endColumn:col+1
+  });
+  for(let i=0;i<text.length;i++){
+    const ch=text[i],next=text[i+1]||'';
+    if(ch==='\n'){line++;column=1;lineComment=false;if(!(quote&&quote.charCodeAt(0)===96))quote=null;escape=false;continue;}
+    if(lineComment){column++;continue;}
+    if(blockComment){
+      if(ch==='*'&&next==='/'){blockComment=false;i++;column+=2;continue;}
+      column++;continue;
+    }
+    if(quote){
+      if(escape){escape=false;column++;continue;}
+      if(ch==='\\'){escape=true;column++;continue;}
+      if(ch===quote)quote=null;
+      column++;continue;
+    }
+    if(cStyle.has(language)&&ch==='/'&&next==='/'){lineComment=true;i++;column+=2;continue;}
+    if(cStyle.has(language)&&ch==='/'&&next==='*'){blockComment=true;i++;column+=2;continue;}
+    if(hashStyle.has(language)&&ch==='#'){lineComment=true;column++;continue;}
+    if(ch==='"'||ch==="'"||(ch.charCodeAt(0)===96&&(language==='javascript'||language==='typescript'))){quote=ch;column++;continue;}
+    if(openToClose[ch])stack.push({ch,line,column});
+    else if(closeToOpen[ch]){
+      const top=stack[stack.length-1];
+      if(!top||top.ch!==closeToOpen[ch])pushMarker('Cierre '+ch+' sin apertura correspondiente.',line,column);
+      else stack.pop();
+    }
+    column++;
+  }
+  for(const item of stack.slice(-80))pushMarker('Falta cerrar '+openToClose[item.ch]+'.',item.line,item.column);
+  return markers;
+}
+function htmlStructureDiagnostics(model){
+  if(model.getLanguageId()!=='html')return [];
+  const text=model.getValue(),markers=[],stack=[];
+  const voidTags=new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
+  const re=/<\s*(\/)?\s*([A-Za-z][A-Za-z0-9:-]*)([^>]*)>/g;
+  let match;
+  while((match=re.exec(text))){
+    const closing=Boolean(match[1]),tag=match[2].toLowerCase(),tail=match[3]||'';
+    if(voidTags.has(tag)||/\/\s*$/.test(tail))continue;
+    const pos=model.getPositionAt(match.index);
+    if(!closing){stack.push({tag,pos});continue;}
+    const top=stack[stack.length-1];
+    if(!top||top.tag!==tag){
+      markers.push({severity:monaco.MarkerSeverity.Error,message:'Etiqueta de cierre </'+tag+'> no coincide con la apertura.',source:'Axiom HTML',startLineNumber:pos.lineNumber,startColumn:pos.column,endLineNumber:pos.lineNumber,endColumn:pos.column+match[0].length});
+    }else stack.pop();
+  }
+  for(const item of stack.slice(-80))markers.push({severity:monaco.MarkerSeverity.Warning,message:'Falta cerrar <'+item.tag+'>.',source:'Axiom HTML',startLineNumber:item.pos.lineNumber,startColumn:item.pos.column,endLineNumber:item.pos.lineNumber,endColumn:item.pos.column+1});
+  return markers;
+}
+function dedupeDiagnosticMarkers(markers){
+  const map=new Map();
+  for(const marker of markers||[]){
+    if(!marker||!marker.message)continue;
+    const key=[marker.startLineNumber,marker.startColumn,marker.endLineNumber,marker.endColumn,marker.message].join('|');
+    const previous=map.get(key);
+    if(!previous||marker.severity>previous.severity)map.set(key,marker);
+  }
+  return [...map.values()].slice(0,300);
+}
+async function languageWorkerDiagnostics(model){
+  const language=model.getLanguageId();
+  if(language==='javascript'||language==='typescript'){
+    const workerFactory=language==='typescript'?monaco.languages.typescript.getTypeScriptWorker:monaco.languages.typescript.getJavaScriptWorker;
+    const getWorker=await workerFactory();
+    const worker=await getWorker(model.uri);
+    const uri=model.uri.toString();
+    const groups=await Promise.all([
+      worker.getSyntacticDiagnostics(uri).catch(()=>[]),
+      worker.getSemanticDiagnostics(uri).catch(()=>[]),
+      worker.getSuggestionDiagnostics(uri).catch(()=>[])
+    ]);
+    return groups.flat().map(diag=>tsDiagnosticMarker(model,diag));
+  }
+  if(language==='json'&&monaco.languages.json&&monaco.languages.json.getWorker){
+    const getWorker=await monaco.languages.json.getWorker();
+    const worker=await getWorker(model.uri);
+    const rows=await worker.doValidation(model.uri.toString());
+    return (rows||[]).map(diag=>lspDiagnosticMarker(diag,'JSON'));
+  }
+  return [];
+}
+async function refreshModelDiagnostics(model){
+  if(!model||model.isDisposed&&model.isDisposed())return;
+  const uri=model.uri.toString();
+  try{
+    const workerMarkers=await languageWorkerDiagnostics(model);
+    if(model.isDisposed&&model.isDisposed())return;
+    const markers=dedupeDiagnosticMarkers(workerMarkers.concat(structuralDiagnostics(model),htmlStructureDiagnostics(model)));
+    monaco.editor.setModelMarkers(model,AXIOM_DIAGNOSTIC_OWNER,markers);
+  }catch(error){
+    if(!(model.isDisposed&&model.isDisposed())){
+      const fallback=dedupeDiagnosticMarkers(structuralDiagnostics(model).concat(htmlStructureDiagnostics(model)));
+      monaco.editor.setModelMarkers(model,AXIOM_DIAGNOSTIC_OWNER,fallback);
+      logOutput('Diagnóstico '+basename(model.uri&&model.uri.fsPath||model.uri&&model.uri.path||'archivo')+': '+String(error&&error.message||error));
+    }
+  }finally{
+    diagnosticTimers.delete(uri);
+  }
+}
+function scheduleModelDiagnostics(model,delay=280){
+  if(!model||model.isDisposed&&model.isDisposed())return;
+  const key=model.uri.toString();
+  clearTimeout(diagnosticTimers.get(key));
+  diagnosticTimers.set(key,setTimeout(()=>refreshModelDiagnostics(model),delay));
+}
+function wireModelDiagnostics(model){
+  if(!model||model.__axiomDiagnosticsWired)return;
+  model.__axiomDiagnosticsWired=true;
+  model.onDidChangeContent(()=>scheduleModelDiagnostics(model));
+  if(model.onWillDispose)model.onWillDispose(()=>{const key=model.uri.toString();clearTimeout(diagnosticTimers.get(key));diagnosticTimers.delete(key);});
+  scheduleModelDiagnostics(model,30);
+}
 function currentProblemMarkers(){
   if(typeof monaco==='undefined')return [];
-  return (monaco.editor.getModelMarkers({})||[])
-    .filter(m=>m&&m.resource&&m.message)
-    .sort((a,b)=>(b.severity-a.severity)||String(a.resource?.fsPath||a.resource?.path||'').localeCompare(String(b.resource?.fsPath||b.resource?.path||''))||(a.startLineNumber-b.startLineNumber)||(a.startColumn-b.startColumn));
+  const unique=new Map();
+  for(const m of monaco.editor.getModelMarkers({})||[]){
+    if(!m||!m.resource||!m.message)continue;
+    const key=[m.resource.toString(),m.startLineNumber,m.startColumn,m.endLineNumber,m.endColumn,m.message].join('|');
+    const previous=unique.get(key);
+    if(!previous||m.severity>previous.severity)unique.set(key,m);
+  }
+  return [...unique.values()].sort((a,b)=>(b.severity-a.severity)||String(a.resource&&a.resource.fsPath||a.resource&&a.resource.path||'').localeCompare(String(b.resource&&b.resource.fsPath||b.resource&&b.resource.path||''))||(a.startLineNumber-b.startLineNumber)||(a.startColumn-b.startColumn));
 }
 function updateProblemBadge(markers=currentProblemMarkers()){
   const tab=$('#problemsTab');if(!tab)return;
@@ -427,9 +597,13 @@ try{
   monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({noSyntaxValidation:false,noSemanticValidation:false,noSuggestionDiagnostics:false});
   monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({noSyntaxValidation:false,noSemanticValidation:false,noSuggestionDiagnostics:false});
 }catch(e){logOutput('Diagnósticos JS/TS: '+e.message);}
+monaco.editor.onDidCreateModel(model=>wireModelDiagnostics(model));
+if(monaco.editor.onDidChangeModelLanguage)monaco.editor.onDidChangeModelLanguage(e=>{wireModelDiagnostics(e.model);scheduleModelDiagnostics(e.model,30);});
+for(const model of monaco.editor.getModels())wireModelDiagnostics(model);
 monaco.editor.onDidChangeMarkers(()=>{updateProblemBadge();if(panelMode==='problems')renderPanelContent();});
-editor.onDidChangeModel(()=>{updateProblemBadge();if(panelMode==='problems')renderPanelContent();});
+editor.onDidChangeModel(()=>{const model=editor.getModel();if(model)scheduleModelDiagnostics(model,30);updateProblemBadge();if(panelMode==='problems')renderPanelContent();});
 editor.addAction({id:'axiom.save',label:'Guardar archivo',keybindings:[monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS],run:saveActive});
+editor.addAction({id:'axiom.problems',label:'Mostrar problemas',keybindings:[monaco.KeyMod.CtrlCmd|monaco.KeyMod.Shift|monaco.KeyCode.KeyM],run:()=>setPanelMode('problems')});
 wireUI();setupShortcuts();await setupSettings();await refreshExtensionState();renderSideView();renderTabs();showCode(false);const restored=await window.axiom.restoreWorkspace();if(restored)useWorkspace(restored,true);else setStatus('AxiomCode listo');logOutput('Workbench iniciado');renderUpdateButton();if(window.AxiomPreferences?.getSetting('update.autoCheck')!==false){setTimeout(()=>checkForAppUpdates(false),1500);setInterval(()=>checkForAppUpdates(false),4*60*60*1000);}
 window.axiom.rendererReady({monaco:true,materialIcons:Object.keys(iconManifest?.iconDefinitions||{}).length,ui:'vscode-dark-modern',views:['explorer','search','scm','run','extensions'],menus:true});
 if(new URLSearchParams(location.search).has('scratch'))openScratchMode();
