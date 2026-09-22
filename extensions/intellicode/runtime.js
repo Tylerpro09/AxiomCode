@@ -1176,7 +1176,7 @@
   }
   function inlineProvider(language){
     return {
-      provideInlineCompletions(model,position,_context,cancelToken){
+      async provideInlineCompletions(model,position,_context,cancelToken){
         if(!enabled||cancelToken?.isCancellationRequested)return {items:[]};
         const lineBefore=model.getLineContent(position.lineNumber).slice(0,position.column-1);
         if(looksLikeComment(lineBefore,language))return {items:[]};
@@ -1227,14 +1227,31 @@
           1
         );
         const best=rows[0];
-        if(!best||best.value.length<=prefix.length||!best.value.toLowerCase().startsWith(prefix.toLowerCase()))return {items:[]};
-        return {items:[{
-          insertText:best.value.slice(prefix.length),
-          range:{
-            startLineNumber:position.lineNumber,startColumn:position.column,
-            endLineNumber:position.lineNumber,endColumn:position.column
-          }
-        }]};
+        if(best&&best.value.length>prefix.length&&best.value.toLowerCase().startsWith(prefix.toLowerCase())){
+          return {items:[{
+            insertText:best.value.slice(prefix.length),
+            range:{
+              startLineNumber:position.lineNumber,startColumn:position.column,
+              endLineNumber:position.lineNumber,endColumn:position.column
+            }
+          }]};
+        }
+        if(aiInlineEnabled&&prefix.length>=2&&getAiKey()){
+          const full=model.getValue(),offset=model.getOffsetAt(position);
+          const aiText=await aiInlineCompletion({
+            language,
+            before:full.slice(Math.max(0,offset-3200),offset),
+            after:full.slice(offset,Math.min(full.length,offset+900))
+          });
+          if(aiText)return {items:[{
+            insertText:aiText,
+            range:{
+              startLineNumber:position.lineNumber,startColumn:position.column,
+              endLineNumber:position.lineNumber,endColumn:position.column
+            }
+          }]};
+        }
+        return {items:[]};
       },
       freeInlineCompletions(){}
     };
@@ -1254,11 +1271,18 @@
       projectIndexEnabled=localStorage.getItem('axiom.intellicode.projectIndex')!=='0';
       profileOverride=localStorage.getItem('axiom.intellicode.profile')||'auto';
       if(!['auto','light','balanced','high'].includes(profileOverride))profileOverride='auto';
+      aiInlineEnabled=localStorage.getItem('axiom.intellicode.aiInline')==='1';
+      aiModel=localStorage.getItem('axiom.intellicode.victors.model')||'';
     }catch{
       enabled=true;
       projectIndexEnabled=true;
       profileOverride='auto';
+      aiInlineEnabled=false;
+      aiModel='';
     }
+    aiClient=new VictorsAIClient({keyProvider:getAiKey});
+    aiModels=[];
+    aiLastDiagnostic=null;
     const initialWorkspace=host.getWorkspace?.();
     if(initialWorkspace?.root)loadCache(String(initialWorkspace.root));
     for(const language of SUPPORTED){
@@ -1313,6 +1337,13 @@
       projectFiles,projectBytes,projectRoot,projectIndexing,lastProjectError,
       project,live,cacheLoaded,memoryProfile:profile.name,profileMode:profileOverride,
       projectIndexEnabled,
+      ai:{
+        configured:Boolean(getAiKey()),
+        inlineEnabled:aiInlineEnabled,
+        model:aiModel||null,
+        availableModels:aiModels.length,
+        lastDiagnostic:aiLastDiagnostic?{...aiLastDiagnostic}:null
+      },
       models:live.models,
       tokens:project.tokens+live.tokens,
       symbols:new Set([...projectEngine.symbols.keys(),...liveEngine.symbols.keys()]).size,
@@ -1330,7 +1361,8 @@
         '<p>Proyecto: '+Number(s.projectFiles||0)+' archivos · '+Math.round(Number(s.projectBytes||0)/1024).toLocaleString()+' KiB</p>'+
         '<p>Modelos abiertos: '+Number(s.models||0)+' · tokens: '+Number(s.tokens||0).toLocaleString()+
         ' · símbolos: '+Number(s.symbols||0).toLocaleString()+'</p>'+
-        '<p>Perfil de memoria: '+htmlEscape(s.memoryProfile)+' ('+htmlEscape(s.profileMode)+') · índice de proyecto: '+(s.projectIndexEnabled?'sí':'no')+' · caché: '+(s.cacheLoaded?'sí':'no')+'</p>'
+        '<p>Perfil de memoria: '+htmlEscape(s.memoryProfile)+' ('+htmlEscape(s.profileMode)+') · índice de proyecto: '+(s.projectIndexEnabled?'sí':'no')+' · caché: '+(s.cacheLoaded?'sí':'no')+'</p>'+
+        '<p>IA Victorsia: '+(s.ai.configured?'configurada':'sin API key')+' · modelo: '+htmlEscape(s.ai.model||'N/D')+' · inline: '+(s.ai.inlineEnabled?'sí':'no')+'</p>'
       );
       return s;
     }
@@ -1376,11 +1408,51 @@
       host?.status?.('Axiom IntelliCode: índice de proyecto '+(projectIndexEnabled?'activado':'desactivado'));
       return status();
     }
+    if(id==='intellicode.ai.configure')return configureAi();
+    if(id==='intellicode.ai.model')return selectAiModel();
+    if(id==='intellicode.ai.complete')return aiCompleteAtCursor();
+    if(id==='intellicode.ai.explain')return aiExplainSelection();
+    if(id==='intellicode.ai.fix')return aiFixSelection();
+    if(id==='intellicode.ai.inline'){
+      aiInlineEnabled=!aiInlineEnabled;
+      try{localStorage.setItem('axiom.intellicode.aiInline',aiInlineEnabled?'1':'0');}catch{}
+      host?.status?.('Axiom IntelliCode IA inline: '+(aiInlineEnabled?'activada':'desactivada'));
+      return status();
+    }
+    if(id==='intellicode.ai.diagnostics'){
+      const d=aiLastDiagnostic||ensureAiClient().lastDiagnostic;
+      if(!d){
+        host?.info?.('Axiom IntelliCode IA · Diagnóstico','<p>No hay una solicitud de IA registrada todavía.</p>');
+        return null;
+      }
+      const value=v=>v===null||v===undefined||v===''?'No disponible':htmlEscape(v);
+      const usage=d.usage||{};
+      host?.info?.('Axiom IntelliCode IA · Diagnóstico',
+        '<p>Modelo: <b>'+value(d.model)+'</b></p>'+
+        '<p>HTTP: '+value(d.status)+' · tiempo: '+value(d.responseTimeMs)+' ms</p>'+
+        '<p>Restantes: '+value(d.remaining)+' · límite: '+value(d.rateLimit)+' · reinicio: '+value(d.reset)+'</p>'+
+        '<p>Política: '+value(d.policy)+' · intervalo local: '+value(d.localIntervalSeconds)+' s</p>'+
+        '<p>Request ID: '+value(d.requestId)+'</p>'+
+        '<p>Tokens: prompt '+value(usage.prompt_tokens)+' · completion '+value(usage.completion_tokens)+' · total '+value(usage.total_tokens)+'</p>'
+      );
+      return d;
+    }
+    if(id==='intellicode.ai.clearKey'){
+      setAiKey('');
+      aiModels=[];
+      aiModel='';
+      aiInlineEnabled=false;
+      aiLastDiagnostic=null;
+      if(aiClient)aiClient.lastDiagnostic=null;
+      host?.status?.('Axiom IntelliCode IA: API key eliminada de la sesión');
+      return status();
+    }
     throw new Error('Comando no reconocido: '+id);
   }
 
   return {
-    LocalIntelliEngine,tokenise,languageFromPath,fuzzyMatch,
+    LocalIntelliEngine,VictorsAIClient,tokenise,languageFromPath,fuzzyMatch,
+    chooseVictorsModel,stripCodeFence,diagnosticFromResponse,parseRateWaitMs,
     activate,deactivate,rebuild,status,runCommand,version:VERSION
   };
 });
