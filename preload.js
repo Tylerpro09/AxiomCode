@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('axiom', {
   replaceWorkspace: (root, query, replacement, options = {}) => ipcRenderer.invoke('workspace:replace', root, query, replacement, options),
   getIconManifest: () => ipcRenderer.invoke('icons:manifest'),
   readFile: p => ipcRenderer.invoke('file:read', p),
+  readFileOptional: p => ipcRenderer.invoke('file:readOptional', p),
   writeFile: (p, content) => ipcRenderer.invoke('file:write', p, content),
   createFile: (p, isDir = false) => ipcRenderer.invoke('file:create', p, isDir),
   renameFile: (from, to) => ipcRenderer.invoke('file:rename', from, to),
