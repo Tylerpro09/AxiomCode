@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "AxiomCode Marketplace",
-  "generatedAt": "2026-09-21T04:26:59.694Z",
+  "generatedAt": "2026-09-22T00:57:12.443Z",
   "extensions": [
     {
       "id": "axiom.scratch-mode",
@@ -55,7 +55,7 @@
       "publisher": "AxiomCode",
       "verified": true,
       "featured": true,
-      "requiresFeature": "intellicode",
+      "requiresFeature": "rendererRuntime",
       "tags": [
         "ai",
         "autocomplete",
