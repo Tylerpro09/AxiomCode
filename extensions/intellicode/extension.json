@@ -1,8 +1,8 @@
 {
   "id": "axiom.intellicode",
   "name": "Axiom IntelliCode",
-  "version": "1.2.0",
-  "description": "Autocompletado inteligente local avanzado para AxiomCode: indexación multiarchivo configurable, contexto n-gram de hasta 3 tokens, ranking por alcance y archivo activo, miembros, ghost text y perfiles de memoria adaptativos.",
+  "version": "1.3.0",
+  "description": "Axiom IntelliCode con motor local avanzado y asistencia IA opcional mediante Victorsia Free: modelos descubiertos por API, completado, explicación, corrección, ghost text IA y diagnóstico de uso.",
   "publisher": "AxiomCode",
   "installedByDefault": false,
   "keywords": [
@@ -23,7 +23,11 @@
     "performance",
     "scope-aware",
     "active-file",
-    "adaptive-memory"
+    "adaptive-memory",
+    "victorsia",
+    "remote-ai",
+    "ai-code-completion",
+    "diagnostics"
   ],
   "contributes": {
     "rendererRuntime": {
@@ -61,6 +65,46 @@
         "id": "intellicode.projectIndex",
         "title": "Axiom IntelliCode: Activar/Desactivar índice de proyecto",
         "method": "projectIndex"
+      },
+      {
+        "id": "intellicode.ai.configure",
+        "title": "Axiom IntelliCode IA: Configurar Victorsia Free",
+        "method": "ai.configure"
+      },
+      {
+        "id": "intellicode.ai.model",
+        "title": "Axiom IntelliCode IA: Cambiar modelo",
+        "method": "ai.model"
+      },
+      {
+        "id": "intellicode.ai.complete",
+        "title": "Axiom IntelliCode IA: Completar en cursor",
+        "method": "ai.complete"
+      },
+      {
+        "id": "intellicode.ai.explain",
+        "title": "Axiom IntelliCode IA: Explicar selección",
+        "method": "ai.explain"
+      },
+      {
+        "id": "intellicode.ai.fix",
+        "title": "Axiom IntelliCode IA: Corregir selección",
+        "method": "ai.fix"
+      },
+      {
+        "id": "intellicode.ai.inline",
+        "title": "Axiom IntelliCode IA: Activar/Desactivar ghost text remoto",
+        "method": "ai.inline"
+      },
+      {
+        "id": "intellicode.ai.diagnostics",
+        "title": "Axiom IntelliCode IA: Diagnóstico de última solicitud",
+        "method": "ai.diagnostics"
+      },
+      {
+        "id": "intellicode.ai.clearKey",
+        "title": "Axiom IntelliCode IA: Olvidar API key de la sesión",
+        "method": "ai.clearKey"
       }
     ]
   }
