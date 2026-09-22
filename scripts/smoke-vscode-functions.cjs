@@ -27,6 +27,17 @@ app.whenReady().then(async()=>{try{
     const root=${JSON.stringify(project)};
     const opened=await window.axiom.openWorkspacePath(root);
     useWorkspace(opened,false);
+    const workspaceSymbols=await window.axiom.workspaceSymbols(root,'sample');
+    showPalette('files');
+    await buildPalette('alpha.js:2:5');
+    const quickItem=paletteItems[0];
+    if(quickItem)await quickItem.run();
+    const quickPos=editor.getPosition();
+    hidePalette();
+    showPalette('symbols');
+    await buildPalette('sample');
+    const symbolPaletteFound=paletteItems.some(item=>item.name==='sample'&&/alpha\.js/.test(item.hint||''));
+    hidePalette();
     const before=await window.axiom.searchWorkspace(root,'foo',{matchCase:false});
     const caseOnly=await window.axiom.searchWorkspace(root,'foo',{matchCase:true});
     const partial=await window.axiom.searchWorkspace(root,'oo',{matchCase:true});
@@ -72,6 +83,9 @@ app.whenReady().then(async()=>{try{
     const outlineRows=[...document.querySelectorAll('.outline-row')].map(x=>x.textContent.trim());
     const commandNames=commands.map(x=>x.name);
     return {
+      workspaceSymbols:workspaceSymbols.length,
+      quickPos,
+      symbolPaletteFound,
       before:before.length,
       caseOnly:caseOnly.length,
       partial:partial.length,
@@ -97,12 +111,14 @@ app.whenReady().then(async()=>{try{
       commandCoverage:[
         'Editor: Ir a definición','Editor: Ver definición','Editor: Ir a referencias',
         'Editor: Cambiar nombre de símbolo','Editor: Acción rápida','Editor: Ir a símbolo...',
-        'Proyecto: Buscar y reemplazar','Archivo: Abrir reciente...',
+        'Proyecto: Buscar y reemplazar','Proyecto: Ir a símbolo en el espacio de trabajo','Archivo: Abrir reciente...',
         'Editor: Fijar/desfijar pestaña','Editor: Cerrar otros editores','Editor: Cerrar editores a la derecha'
       ].every(name=>commandNames.includes(name))
     };
   })()`);
   log('RESULT',result);
+  if(result.workspaceSymbols<1||!result.symbolPaletteFound)throw Error('Workspace symbol search failed');
+  if(result.quickPos?.lineNumber!==2||result.quickPos?.column!==5)throw Error('Quick Open :line:column failed');
   if(result.before<3)throw Error('Workspace search did not find expected matches');
   if(result.caseOnly!==3)throw Error('Case-sensitive search failed');
   if(result.partial!==4||result.whole!==0)throw Error('Whole-word search failed');
@@ -121,6 +137,6 @@ app.whenReady().then(async()=>{try{
   if(!result.peekVisible)throw Error('Peek definition preview failed');
   if(!result.outlineRows?.some(x=>/alphaSymbol/.test(x)))throw Error('Outline view failed');
   if(!result.commandCoverage)throw Error('Command palette coverage missing');
-  log('PASS search/replace regex/whole-word, Explorer copy/paste, pinned/reordered tabs, recent workspaces, breadcrumbs, editor navigation/actions');
+  log('PASS Quick Open line/column, workspace symbols, search/replace regex/whole-word, Explorer copy/paste, pinned/reordered tabs, recent workspaces, breadcrumbs, editor navigation/actions');
   finish(0);
 }catch(error){log(error.stack||error);finish(1)}});
