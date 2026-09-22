@@ -26,7 +26,7 @@ fs.writeFileSync(path.join(project,'helper.py'),[
 ].join('\n'));
 
 const resultFile=path.join(__dirname,'intellicode-project-result.log');
-fs.writeFileSync(resultFile,'Starting IntelliCode project-index smoke\n');
+fs.writeFileSync(resultFile,'Starting IntelliCode project + AI smoke\n');
 const log=(...x)=>fs.appendFileSync(resultFile,x.map(v=>typeof v==='string'?v:JSON.stringify(v)).join(' ')+'\n');
 app.setPath('userData',path.join(temp,'userData'));
 require('../main');
@@ -49,12 +49,57 @@ app.whenReady().then(async()=>{try{
     {type:'file',name:'customer.js',path:path.join(project,'customer.js')},
     {type:'file',name:'helper.py',path:path.join(project,'helper.py')}
   ];
+
   const setup=await win.webContents.executeJavaScript(`(async()=>{
     workspace=${JSON.stringify({root:project,tree})};
+    sessionStorage.setItem('axiom.intellicode.victors.key','test-session-key');
+    localStorage.removeItem('axiom.intellicode.victors.model');
+    window.__intellicodeAiRequests=[];
+    window.fetch=async(url,options={})=>{
+      const headers=options.headers||{};
+      window.__intellicodeAiRequests.push({
+        url:String(url),
+        requestId:headers['X-Request-ID']||null,
+        hasAuthorization:Boolean(headers.Authorization),
+        bodyModel:options.body?JSON.parse(options.body).model:null
+      });
+      const makeHeaders=values=>({get:name=>values[String(name).toLowerCase()]??null});
+      if(String(url).endsWith('/v1/models')){
+        return {
+          status:200,ok:true,
+          headers:makeHeaders({'x-request-id':'server-models','x-response-time-ms':'12.5'}),
+          async json(){return {data:[{id:'auto:coding'},{id:'online/openrouter/cohere/north-mini-code:free'}]}}
+        };
+      }
+      if(String(url).endsWith('/v1/chat/completions')){
+        return {
+          status:200,ok:true,
+          headers:makeHeaders({
+            'x-request-id':'server-chat',
+            'x-response-time-ms':'30.1',
+            'x-ratelimit-remaining':'8'
+          }),
+          async json(){return {
+            model:'auto:coding',
+            choices:[{message:{content:'42;'}}],
+            usage:{prompt_tokens:20,completion_tokens:2,total_tokens:22}
+          }}
+        };
+      }
+      throw new Error('Unexpected fetch '+url);
+    };
+
     await window.axiom.installExtension('axiom.intellicode');
     await refreshExtensionState();
     await new Promise(r=>setTimeout(r,700));
     const state=window.AxiomIntelliCode?.status?.();
+    const commandIds=[
+      'intellicode.status','intellicode.rebuild','intellicode.toggle',
+      'intellicode.clear','intellicode.profile','intellicode.projectIndex',
+      'intellicode.ai.configure','intellicode.ai.model','intellicode.ai.complete',
+      'intellicode.ai.explain','intellicode.ai.fix','intellicode.ai.inline',
+      'intellicode.ai.diagnostics','intellicode.ai.clearKey'
+    ];
     return {
       version:state?.version,
       active:state?.active,
@@ -63,14 +108,12 @@ app.whenReady().then(async()=>{try{
       projectBytes:state?.projectBytes,
       symbols:state?.symbols,
       profile:state?.memoryProfile,
-      commands:[
-        'intellicode.status','intellicode.rebuild','intellicode.toggle',
-        'intellicode.clear','intellicode.profile','intellicode.projectIndex'
-      ].every(id=>extensionCommands.has(id))
+      aiConfigured:state?.ai?.configured,
+      commands:commandIds.every(id=>extensionCommands.has(id))
     };
   })()`);
   log('SETUP',setup);
-  if(setup.version!=='1.2.0'||!setup.active||!setup.enabled||setup.projectFiles<3||setup.projectBytes<100||setup.symbols<5||!setup.commands)throw Error('Project indexing did not initialize correctly');
+  if(setup.version!=='1.3.0'||!setup.active||!setup.enabled||setup.projectFiles<3||setup.projectBytes<100||setup.symbols<5||!setup.aiConfigured||!setup.commands)throw Error('Project/AI setup did not initialize correctly');
 
   const controls=await win.webContents.executeJavaScript(`(async()=>{
     const off=await window.AxiomIntelliCode.runCommand('intellicode.projectIndex');
@@ -92,6 +135,38 @@ app.whenReady().then(async()=>{try{
   if(controls.profile.mode!=='light'||controls.profile.name!=='ligero')throw Error('Profile cycling failed');
   if(controls.paused!==false||controls.resumed!==true)throw Error('Enable/pause toggle failed');
 
+  const ai=await win.webContents.executeJavaScript(`(async()=>{
+    const model=monaco.editor.createModel('const value = ','javascript');
+    editor.setModel(model);
+    editor.setPosition({lineNumber:1,column:model.getLineMaxColumn(1)});
+    const diagnostic=await window.AxiomIntelliCode.runCommand('intellicode.ai.complete');
+    const state=window.AxiomIntelliCode.status();
+    const requests=window.__intellicodeAiRequests.map(x=>({...x}));
+    return {
+      value:model.getValue(),
+      model:state.ai.model,
+      diagnostic:{
+        status:diagnostic?.status,
+        requestId:diagnostic?.requestId,
+        remaining:diagnostic?.remaining,
+        totalTokens:diagnostic?.usage?.total_tokens
+      },
+      requests,
+      leakedSecret:JSON.stringify(state).includes('test-session-key')
+    };
+  })()`);
+  log('AI',{
+    value:ai.value,model:ai.model,diagnostic:ai.diagnostic,
+    requests:ai.requests.map(x=>({url:x.url,requestId:x.requestId,hasAuthorization:x.hasAuthorization,bodyModel:x.bodyModel})),
+    leakedSecret:ai.leakedSecret
+  });
+  if(ai.value!=='const value = 42;')throw Error('AI completion was not inserted');
+  if(ai.model!=='auto:coding')throw Error('Full model ID was not selected from /models');
+  if(ai.diagnostic.status!==200||ai.diagnostic.requestId!=='server-chat'||ai.diagnostic.remaining!=='8'||ai.diagnostic.totalTokens!==22)throw Error('AI diagnostics mismatch');
+  if(ai.requests.length!==2||!ai.requests.every(x=>x.requestId&&x.hasAuthorization)||ai.requests[0].requestId===ai.requests[1].requestId)throw Error('Request-ID/auth flow failed');
+  if(ai.requests[1].bodyModel!=='auto:coding')throw Error('Chat request did not use discovered full model id');
+  if(ai.leakedSecret)throw Error('API key leaked into status telemetry');
+
   const removed=await win.webContents.executeJavaScript(`(async()=>{
     await window.axiom.uninstallExtension('axiom.intellicode');
     await refreshExtensionState();
@@ -100,7 +175,7 @@ app.whenReady().then(async()=>{try{
   log('REMOVED',removed);
   if(removed.global||removed.runtime)throw Error('Runtime did not unload');
 
-  log('PASS project indexing, controls, adaptive profile and unload');
+  log('PASS project indexing, AI model discovery, AI completion, telemetry privacy, controls and unload');
   finish(0);
 }catch(error){
   log(error.stack||error);
