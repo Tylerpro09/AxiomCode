@@ -280,5 +280,5 @@
     throw new Error('Comando no reconocido: '+id);
   }
 
-  return {LocalIntelliEngine,tokenise,activate,deactivate,rebuild,status,runCommand,version:'1.0.0'};
+  return {LocalIntelliEngine,tokenise,activate,deactivate,rebuild,status,runCommand,version:'1.0.1'};
 });
