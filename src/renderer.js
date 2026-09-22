@@ -271,7 +271,7 @@ function toggleSidebar(force){sidebarVisible=force??!sidebarVisible;document.bod
 async function updateGit(){if(!workspace)return;const r=await window.axiom.gitStatus(workspace.root),first=(r.stdout||'').split(/\r?\n/)[0],branch=r.ok?(first.replace(/^##\s*/,'').split('...')[0]||'git'):'sin git';$('#gitStatus').innerHTML=`<span class="codicon codicon-source-control"></span>${escapeHtml(branch)}`;if(sideMode==='scm')renderSideView();}
 function fitActiveTerminal(){const t=terminalState.sessions.get(terminalState.active);if(!t?.fit||panelMode!=='terminal')return;requestAnimationFrame(()=>{try{t.fit.fit();window.axiom.resizeTerminal(t.id,t.term.cols,t.term.rows);}catch{}});}
 function togglePanel(force){const p=$('#panel'),open=force??!p.classList.contains('open');p.classList.toggle('open',open);if(open&&panelMode==='terminal')renderActiveTerminal();setTimeout(()=>{editor?.layout();fitActiveTerminal();},40);}
-function setPanelMode(mode){panelMode=mode;togglePanel(true);$('.panel-title-strip>button').forEach(b=>b.classList.remove('active'));const ids={problems:'#problemsTab',output:'#outputTab',debug:'#debugTab',terminal:'#terminalTab'};$(ids[mode])?.classList.add('active');renderPanelContent();}
+function setPanelMode(mode){panelMode=mode;togglePanel(true);$$('.panel-title-strip>button').forEach(b=>b.classList.remove('active'));const ids={problems:'#problemsTab',output:'#outputTab',debug:'#debugTab',terminal:'#terminalTab'};$(ids[mode])?.classList.add('active');renderPanelContent();}
 function currentProblemMarkers(){
   if(typeof monaco==='undefined')return [];
   return (monaco.editor.getModelMarkers({})||[])
