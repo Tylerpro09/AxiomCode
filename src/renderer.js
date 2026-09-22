@@ -374,6 +374,41 @@ function renderSearch(host){
   };
   input.focus();
 }
+async function openGitDiff(change){
+  if(!workspace||!change?.path)return;
+  const filePath=join(workspace.root,change.path.replace(/\//g,'\\'));
+  let modified='';
+  try{
+    const tab=tabs.get(filePath);
+    modified=tab?tab.model.getValue():(await window.axiom.readFile(filePath)).content;
+  }catch(e){return showInfo('Git Diff','<p>'+escapeHtml(e.message)+'</p>');}
+  let original='';
+  if(!change.untracked){
+    try{
+      const head=await window.axiom.gitShowHead(workspace.root,change.path);
+      if(head.ok)original=head.stdout||'';
+    }catch{}
+  }
+  document.querySelector('.diff-overlay')?.remove();
+  const back=document.createElement('div');back.className='diff-overlay';
+  back.innerHTML='<div class="diff-shell"><div class="diff-head"><div><span class="codicon codicon-diff"></span><b>'+escapeHtml(change.path)+'</b><small>HEAD ↔ cambios actuales</small></div><div><button class="diff-open"><span class="codicon codicon-go-to-file"></span> Abrir archivo</button><button class="diff-close" title="Cerrar"><span class="codicon codicon-close"></span></button></div></div><div class="diff-host"></div></div>';
+  document.body.appendChild(back);
+  const host=back.querySelector('.diff-host');
+  const langId=fileLang(filePath);
+  const originalModel=monaco.editor.createModel(original,langId);
+  const modifiedModel=monaco.editor.createModel(modified,langId);
+  const diff=monaco.editor.createDiffEditor(host,{
+    theme:'axiom-vscode-dark',automaticLayout:true,readOnly:true,originalEditable:false,
+    renderSideBySide:true,minimap:{enabled:false},scrollBeyondLastLine:false,
+    fontFamily:'Cascadia Code, Consolas, monospace',fontSize:13,lineHeight:20
+  });
+  diff.setModel({original:originalModel,modified:modifiedModel});
+  const close=()=>{try{diff.dispose();originalModel.dispose();modifiedModel.dispose();}catch{}back.remove();};
+  back.querySelector('.diff-close').onclick=close;
+  back.querySelector('.diff-open').onclick=async()=>{close();await openFile(filePath);};
+  back.addEventListener('keydown',e=>{if(e.key==='Escape')close();});
+  back.tabIndex=-1;back.focus();
+}
 function parseChanges(text){
   return String(text||'').split(/\r?\n/).filter(Boolean).map(line=>{
     const x=line[0]||' ',y=line[1]||' ',raw=line.slice(3);
@@ -408,6 +443,8 @@ async function renderSCM(host){
     open.innerHTML=`<span>${escapeHtml(change.path)}</span><b>${escapeHtml(change.code)}</b>`;
     open.onclick=()=>openFile(join(workspace.root,change.path.replace(/\//g,'\\')));
     const actions=document.createElement('div');actions.className='scm-file-actions';
+    const diffBtn=document.createElement('button');diffBtn.title='Abrir cambios';diffBtn.innerHTML='<span class="codicon codicon-diff"></span>';
+    diffBtn.onclick=()=>openGitDiff(change);actions.appendChild(diffBtn);
     if(change.staged){
       const unstage=document.createElement('button');unstage.title='Quitar de preparados';unstage.innerHTML='<span class="codicon codicon-remove"></span>';
       unstage.onclick=async()=>{const res=await window.axiom.gitUnstageFile(workspace.root,change.path);if(!res.ok)showInfo('Git','<pre>'+escapeHtml(res.stderr||'No se pudo quitar de preparados')+'</pre>');renderSCM(host);};actions.appendChild(unstage);
