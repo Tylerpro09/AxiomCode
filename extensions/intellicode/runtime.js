@@ -356,6 +356,7 @@
         await this.sleepFn(waitMs);
         return this.request(path,options,false);
       }
+      if(response.status===429)throw victorsError(429,'Victorsia Free mantiene el límite de solicitudes activo. Intenta de nuevo después del reinicio indicado.','RATE_LIMIT',diagnostic);
       if(response.status===401)throw victorsError(401,'La API key fue rechazada. Revisa la API key de Victorsia Free.','AUTH',diagnostic);
       if(response.status===503)throw victorsError(503,'Victorsia Free está offline temporalmente.','PROVIDER_OFFLINE',diagnostic);
       if(!response.ok)throw victorsError(response.status,'Victorsia Free respondió con HTTP '+response.status+'.','HTTP',diagnostic);
