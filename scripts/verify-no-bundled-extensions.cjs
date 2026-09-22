@@ -3,8 +3,9 @@ const path=require('path');
 const asar=require('@electron/asar');
 
 const root=path.resolve(__dirname,'..');
-const archive=path.join(root,'dist','win-unpacked','resources','app.asar');
-if(!fs.existsSync(archive))throw new Error('No existe dist/win-unpacked/resources/app.asar. Ejecuta npm run dist primero.');
+const output=String(process.argv[2]||'dist').trim()||'dist';
+const archive=path.join(root,output,'win-unpacked','resources','app.asar');
+if(!fs.existsSync(archive))throw new Error(`No existe ${output}/win-unpacked/resources/app.asar. Compila ese output primero.`);
 const files=asar.listPackage(archive);
 const bundled=files.filter(x=>/^\\extensions(?:\\|$)/i.test(x));
 if(bundled.length){
