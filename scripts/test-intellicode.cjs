@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const {LocalIntelliEngine,tokenise,version}=require('../extensions/intellicode/runtime.js');
 
 test('Axiom IntelliCode runtime is original local engine',()=>{
-  assert.equal(version,'1.0.0');
+  assert.equal(version,'1.0.1');
   assert.deepEqual(tokenise('alpha.beta(gamma)'),['alpha','.','beta','(','gamma',')']);
 });
 
