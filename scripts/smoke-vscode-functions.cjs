@@ -35,6 +35,7 @@ app.whenReady().then(async()=>{try{
     await openFile(root+'\\\\src\\\\alpha.js');
     setSideMode('search');
     await new Promise(r=>setTimeout(r,100));
+    const searchReplaceUi=Boolean(document.querySelector('#sideReplaceInput')&&document.querySelector('#replaceAllBtn')&&document.querySelector('#searchCaseBtn'));
     const actionIds=['editor.action.rename','editor.action.quickFix','editor.action.triggerSuggest','editor.action.quickOutline','editor.action.marker.next'];
     const actions=Object.fromEntries(actionIds.map(id=>[id,Boolean(editor.getAction(id))]));
     const js=editor.getModel();
@@ -61,7 +62,7 @@ app.whenReady().then(async()=>{try{
       bars:bars.length,
       recent:(await window.axiom.recentWorkspaces()).includes(root),
       breadcrumbs:[...document.querySelectorAll('.breadcrumb-item')].map(x=>x.textContent.trim()),
-      searchReplaceUi:Boolean(document.querySelector('#sideReplaceInput')&&document.querySelector('#replaceAllBtn')&&document.querySelector('#searchCaseBtn')),
+      searchReplaceUi,
       actions,
       definitionPos,
       references:references?.length||0,
