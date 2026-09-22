@@ -373,10 +373,149 @@ async function openWorkspace(){const w=await window.axiom.openWorkspace();if(w)u
 async function refreshWorkspace(){if(!workspace)return;workspace=await window.axiom.refreshWorkspace(workspace.root);renderSideView();setStatus('Explorador actualizado');}
 async function createNewFile(){if(!workspace)return setStatus('Primero abre una carpeta');const name=await askInput('Nombre del nuevo archivo:');if(!name)return;try{const p=join(workspace.root,name);await window.axiom.createFile(p,false);await refreshWorkspace();openFile(p);}catch(e){showInfo('Error',escapeHtml(e.message));}}
 async function createNewFolder(){if(!workspace)return setStatus('Primero abre una carpeta');const name=await askInput('Nombre de la nueva carpeta:');if(!name)return;try{await window.axiom.createFile(join(workspace.root,name),true);await refreshWorkspace();}catch(e){showInfo('Error',escapeHtml(e.message));}}
-async function renamePath(p){const name=await askInput('Nuevo nombre:',basename(p));if(!name||name===basename(p))return;const to=join(dirname(p),name);await window.axiom.renameFile(p,to);if(tabs.has(p)){const t=tabs.get(p);tabs.delete(p);tabs.set(to,t);if(activePath===p)activePath=to;}await refreshWorkspace();renderTabs();}
-async function deletePath(p){if(!confirm(`¿Eliminar ${basename(p)}?`))return;await window.axiom.deleteFile(p);if(tabs.has(p))closeTab(p);await refreshWorkspace();}
-function showContextMenu(x,y,p){document.querySelector('.context-menu')?.remove();const m=document.createElement('div');m.className='context-menu';m.innerHTML='<button data-a="open">Abrir</button><button data-a="rename">Cambiar nombre</button><button data-a="copy">Copiar ruta</button><button data-a="copyrel">Copiar ruta relativa</button><button data-a="reveal">Mostrar en Explorador</button><div></div><button data-a="delete" class="danger">Eliminar</button>';m.style.left=x+'px';m.style.top=y+'px';m.onclick=async e=>{const a=e.target.dataset.a;if(a==='open')await openFile(p);if(a==='rename')await renamePath(p);if(a==='copy')await window.axiom.clipboardWrite(p);if(a==='copyrel')await window.axiom.clipboardWrite(relativeToWorkspace(p));if(a==='reveal')window.axiom.reveal(p);if(a==='delete')await deletePath(p);m.remove();};document.body.appendChild(m);setTimeout(()=>document.addEventListener('click',()=>m.remove(),{once:true}),0);}
-function renderExplorer(host){if(!workspace){host.innerHTML='<div class="empty-state">Todavía no has abierto una carpeta.<button id="welcomeOpenSide">Abrir carpeta</button></div>';$('#welcomeOpenSide').onclick=openWorkspace;return;}const draw=(nodes,depth)=>nodes.forEach(n=>{const open=n.type==='dir'&&n._open!==false,id=n.type==='dir'?folderIconId(n.name,open):fileIconId(n.name),row=document.createElement('div');row.className='tree-row'+(n.path===activePath?' selected':'');row.style.paddingLeft=(5+depth*13)+'px';row.innerHTML=`<span class="chev">${n.type==='dir'?`<span class="codicon codicon-chevron-${open?'down':'right'}"></span>`:''}</span><span class="icon-wrap">${iconHtml(id)}</span><span>${escapeHtml(n.name)}</span>`;row.onclick=()=>{if(n.type==='dir'){n._open=n._open===false;renderSideView();}else openFile(n.path);};row.oncontextmenu=e=>{e.preventDefault();showContextMenu(e.clientX,e.clientY,n.path);};host.appendChild(row);if(open)draw(n.children||[],depth+1);});draw(workspace.tree,0);}
+function workspaceNode(target,nodes=workspace?.tree||[]){
+  for(const node of nodes){
+    if(node.path===target)return node;
+    if(node.children){const found=workspaceNode(target,node.children);if(found)return found;}
+  }
+  return null;
+}
+function remapOpenTabs(from,to){
+  const normFrom=normalizeSlash(from),updates=[];
+  for(const [p,t] of tabs){
+    const norm=normalizeSlash(p);
+    if(norm===normFrom||norm.startsWith(normFrom+'/')){
+      const suffix=norm.slice(normFrom.length).replace(/^\//,'');
+      const next=suffix?join(to,suffix.replace(/\//g,to.includes('\\')?'\\':'/')):to;
+      const content=t.model.getValue(),language=t.model.getLanguageId?.()||fileLang(next);
+      const replacement=monaco.editor.createModel(content,language,monaco.Uri.file(next));
+      updates.push({old:p,next,tab:{...t,model:replacement}});
+    }
+  }
+  let nextActive=activePath;
+  for(const item of updates){
+    const wasActive=activePath===item.old;
+    try{item.tab===tabs.get(item.old)||tabs.get(item.old)?.model.dispose();}catch{}
+    tabs.delete(item.old);tabs.set(item.next,item.tab);
+    if(wasActive)nextActive=item.next;
+  }
+  activePath=nextActive;
+  normalizePinnedTabs();
+  if(activePath&&tabs.has(activePath))activate(activePath);else renderTabs();
+}
+function removeTabsUnder(root){
+  const normRoot=normalizeSlash(root),remove=[];
+  for(const [p,t] of tabs){const norm=normalizeSlash(p);if(norm===normRoot||norm.startsWith(normRoot+'/'))remove.push([p,t]);}
+  let activeRemoved=false;
+  for(const [p,t] of remove){if(activePath===p)activeRemoved=true;try{t.model.dispose();}catch{}tabs.delete(p);}
+  if(activeRemoved){activePath=[...tabs.keys()].pop()||null;if(activePath)activate(activePath);else{showCode(false);renderBreadcrumbs();}}
+  renderTabs();
+}
+function copyDuplicateName(name){
+  const dot=name.lastIndexOf('.');
+  if(dot>0)return name.slice(0,dot)+' - copia'+name.slice(dot);
+  return name+' - copia';
+}
+function setExplorerClipboard(mode,p){
+  explorerClipboard={mode,path:p};
+  explorerSelection=p;
+  setStatus((mode==='cut'?'Cortar: ':'Copiar: ')+relativeToWorkspace(p));
+}
+async function pasteExplorerPath(targetPath,targetIsDir){
+  if(!explorerClipboard||!workspace)return false;
+  const source=explorerClipboard.path;
+  const node=workspaceNode(targetPath);
+  const isDir=targetIsDir??node?.type==='dir';
+  const targetDir=isDir?targetPath:dirname(targetPath);
+  let destination=join(targetDir,basename(source));
+  if(normalizeSlash(destination).toLowerCase()===normalizeSlash(source).toLowerCase()){
+    if(explorerClipboard.mode==='cut'){setStatus('El elemento ya está en esta carpeta');return false;}
+    destination=join(targetDir,copyDuplicateName(basename(source)));
+  }
+  try{
+    if(explorerClipboard.mode==='cut'){
+      await window.axiom.renameFile(source,destination);
+      remapOpenTabs(source,destination);
+      explorerClipboard=null;
+    }else await window.axiom.copyFile(source,destination);
+    explorerSelection=destination;
+    await refreshWorkspace();
+    setStatus((explorerClipboard?.mode==='copy'?'Copiado':'Movido')+' a '+relativeToWorkspace(destination));
+    return true;
+  }catch(error){
+    showInfo('Explorador','<p>'+escapeHtml(error.message)+'</p>');
+    return false;
+  }
+}
+async function duplicatePath(p){
+  const suggestion=copyDuplicateName(basename(p));
+  const name=await askInput('Nombre de la copia:',suggestion);
+  if(!name)return false;
+  try{
+    const destination=join(dirname(p),name);
+    await window.axiom.copyFile(p,destination);
+    explorerSelection=destination;
+    await refreshWorkspace();
+    setStatus('Duplicado: '+relativeToWorkspace(destination));
+    return true;
+  }catch(error){showInfo('Explorador','<p>'+escapeHtml(error.message)+'</p>');return false;}
+}
+async function renamePath(p){
+  const name=await askInput('Nuevo nombre:',basename(p));if(!name||name===basename(p))return;
+  const to=join(dirname(p),name);
+  try{await window.axiom.renameFile(p,to);remapOpenTabs(p,to);explorerSelection=to;await refreshWorkspace();renderTabs();}
+  catch(error){showInfo('Explorador','<p>'+escapeHtml(error.message)+'</p>');}
+}
+async function deletePath(p){
+  if(!confirm(`¿Eliminar ${basename(p)}?`))return;
+  try{await window.axiom.deleteFile(p);removeTabsUnder(p);if(explorerSelection===p)explorerSelection=null;await refreshWorkspace();}
+  catch(error){showInfo('Explorador','<p>'+escapeHtml(error.message)+'</p>');}
+}
+function showContextMenu(x,y,p,isDir=false){
+  explorerSelection=p;
+  document.querySelector('.context-menu')?.remove();
+  const m=document.createElement('div');m.className='context-menu';
+  m.innerHTML='<button data-a="open">Abrir</button><button data-a="copyitem">Copiar</button><button data-a="cutitem">Cortar</button><button data-a="pasteitem" '+(explorerClipboard?'':'disabled')+'>Pegar</button><button data-a="duplicate">Duplicar</button><div></div><button data-a="rename">Cambiar nombre</button><button data-a="copypath">Copiar ruta</button><button data-a="copyrel">Copiar ruta relativa</button><button data-a="reveal">Mostrar en Explorador</button><div></div><button data-a="delete" class="danger">Eliminar</button>';
+  m.style.left=x+'px';m.style.top=y+'px';
+  m.onclick=async e=>{
+    const a=e.target.dataset.a;if(!a)return;
+    if(a==='open'){if(isDir){const n=workspaceNode(p);if(n){n._open=n._open===false;renderSideView();}}else await openFile(p);}
+    if(a==='copyitem')setExplorerClipboard('copy',p);
+    if(a==='cutitem')setExplorerClipboard('cut',p);
+    if(a==='pasteitem'&&explorerClipboard)await pasteExplorerPath(p,isDir);
+    if(a==='duplicate')await duplicatePath(p);
+    if(a==='rename')await renamePath(p);
+    if(a==='copypath')await window.axiom.clipboardWrite(p);
+    if(a==='copyrel')await window.axiom.clipboardWrite(relativeToWorkspace(p));
+    if(a==='reveal')window.axiom.reveal(p);
+    if(a==='delete')await deletePath(p);
+    m.remove();
+  };
+  document.body.appendChild(m);setTimeout(()=>document.addEventListener('click',()=>m.remove(),{once:true}),0);
+}
+function renderExplorer(host){
+  if(!workspace){host.innerHTML='<div class="empty-state">Todavía no has abierto una carpeta.<button id="welcomeOpenSide">Abrir carpeta</button></div>';$('#welcomeOpenSide').onclick=openWorkspace;return;}
+  const draw=(nodes,depth)=>nodes.forEach(n=>{
+    const open=n.type==='dir'&&n._open!==false,id=n.type==='dir'?folderIconId(n.name,open):fileIconId(n.name),row=document.createElement('div');
+    row.className='tree-row'+((n.path===explorerSelection||(!explorerSelection&&n.path===activePath))?' selected':'');
+    row.tabIndex=0;row.dataset.path=n.path;row.style.paddingLeft=(5+depth*13)+'px';
+    row.innerHTML=`<span class="chev">${n.type==='dir'?`<span class="codicon codicon-chevron-${open?'down':'right'}"></span>`:''}</span><span class="icon-wrap">${iconHtml(id)}</span><span>${escapeHtml(n.name)}</span>`;
+    row.onclick=()=>{explorerSelection=n.path;if(n.type==='dir'){n._open=n._open===false;renderSideView();}else openFile(n.path);};
+    row.onfocus=()=>{explorerSelection=n.path;};
+    row.oncontextmenu=e=>{e.preventDefault();showContextMenu(e.clientX,e.clientY,n.path,n.type==='dir');};
+    row.onkeydown=async e=>{
+      const ctrl=e.ctrlKey||e.metaKey;
+      if(e.key==='Enter'){e.preventDefault();e.stopPropagation();row.click();}
+      else if(e.key==='F2'){e.preventDefault();e.stopPropagation();await renamePath(n.path);}
+      else if(e.key==='Delete'){e.preventDefault();e.stopPropagation();await deletePath(n.path);}
+      else if(ctrl&&e.key.toLowerCase()==='c'){e.preventDefault();e.stopPropagation();setExplorerClipboard('copy',n.path);}
+      else if(ctrl&&e.key.toLowerCase()==='x'){e.preventDefault();e.stopPropagation();setExplorerClipboard('cut',n.path);}
+      else if(ctrl&&e.key.toLowerCase()==='v'){e.preventDefault();e.stopPropagation();await pasteExplorerPath(n.path,n.type==='dir');}
+    };
+    host.appendChild(row);if(open)draw(n.children||[],depth+1);
+  });
+  draw(workspace.tree,0);
+}
 function renderSearch(host){
   host.innerHTML='<div class="side-search"><div class="side-input"><span class="codicon codicon-search"></span><input id="sideSearchInput" placeholder="Buscar"><button id="searchCaseBtn" class="search-option" title="Coincidir mayúsculas/minúsculas">Aa</button><button id="searchWordBtn" class="search-option" title="Solo palabra completa">Ab</button><button id="searchRegexBtn" class="search-option" title="Usar expresión regular">.*</button></div><div class="side-input replace-input"><span class="codicon codicon-replace"></span><input id="sideReplaceInput" placeholder="Reemplazar"><button id="replaceAllBtn" title="Reemplazar todo"><span class="codicon codicon-replace-all"></span></button></div><div id="sideSearchMeta" class="search-meta"></div><div id="sideSearchResults" class="side-results"></div></div>';
   const input=$('#sideSearchInput'),replace=$('#sideReplaceInput'),results=$('#sideSearchResults'),meta=$('#sideSearchMeta'),caseBtn=$('#searchCaseBtn'),wordBtn=$('#searchWordBtn'),regexBtn=$('#searchRegexBtn');
