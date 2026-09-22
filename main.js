@@ -50,6 +50,84 @@ async function assertSafeScratchUrl(raw) {
   if (!resolved.length || resolved.some(x => isPrivateIp(x.address))) throw new Error('Dirección privada o local bloqueada');
   return url;
 }
+
+function extensionNetworkHostAllowed(host,allowedHosts){
+  const value=String(host||'').toLowerCase();
+  return (allowedHosts||[]).some(raw=>{
+    const rule=String(raw||'').trim().toLowerCase();
+    if(!rule)return false;
+    if(rule.startsWith('*.'))return value.endsWith(rule.slice(1))&&value!==rule.slice(2);
+    return value===rule;
+  });
+}
+function sanitizeExtensionRequestHeaders(input){
+  const blocked=new Set(['host','content-length','connection','cookie','set-cookie','proxy-authorization','proxy-authenticate','transfer-encoding','upgrade']);
+  const result={};
+  const entries=Object.entries(input&&typeof input==='object'?input:{});
+  if(entries.length>32)throw new Error('Demasiadas cabeceras HTTP');
+  for(const [rawName,rawValue] of entries){
+    const name=String(rawName||'').trim();
+    const lower=name.toLowerCase();
+    if(!/^[A-Za-z0-9!#$%&'*+.^_|~-]{1,64}$/.test(name)||blocked.has(lower))continue;
+    const value=String(rawValue??'');
+    if(value.length>8192||/[\r\n]/.test(value))throw new Error('Cabecera HTTP no válida');
+    result[name]=value;
+  }
+  return result;
+}
+async function extensionNetworkRequest(extensionId, request={}){
+  const item=await backend.extensions.installedEntry(String(extensionId||''));
+  if(!item)throw new Error('La extensión no está instalada o está deshabilitada');
+  const permission=item.contributes?.rendererRuntime?.permissions;
+  const allowedHosts=Array.isArray(permission?.networkHosts)?permission.networkHosts.map(String).filter(Boolean):[];
+  if(!allowedHosts.length)throw new Error('La extensión no declaró permisos de red');
+  let url=await assertSafeScratchUrl(request.url);
+  if(!extensionNetworkHostAllowed(url.hostname,allowedHosts))throw new Error('Host no permitido por el manifiesto de la extensión');
+  let method=String(request.method||'GET').toUpperCase();
+  if(!['GET','POST'].includes(method))throw new Error('Método HTTP no permitido para extensiones');
+  const headers=sanitizeExtensionRequestHeaders(request.headers);
+  headers['User-Agent']='AxiomCode-Extension/'+app.getVersion();
+  const body=method==='POST'&&request.body!==undefined?String(request.body):undefined;
+  if(body&&Buffer.byteLength(body)>2*1024*1024)throw new Error('Solicitud HTTP supera 2 MiB');
+  const timeoutMs=Math.max(1000,Math.min(60000,Number(request.timeoutMs)||30000));
+  for(let hop=0;hop<6;hop++){
+    const response=await fetch(url,{
+      method,headers,body:method==='POST'?body:undefined,redirect:'manual',
+      signal:AbortSignal.timeout(timeoutMs)
+    });
+    if([301,302,303,307,308].includes(response.status)){
+      const location=response.headers.get('location');
+      if(!location)throw new Error('Redirección HTTP sin destino');
+      url=await assertSafeScratchUrl(new URL(location,url).href);
+      if(!extensionNetworkHostAllowed(url.hostname,allowedHosts))throw new Error('La redirección salió de los hosts permitidos');
+      if(response.status===303)method='GET';
+      continue;
+    }
+    const chunks=[];let total=0;
+    const reader=response.body?.getReader();
+    if(reader){
+      while(true){
+        const {done,value}=await reader.read();
+        if(done)break;
+        total+=value.byteLength;
+        if(total>8*1024*1024){reader.cancel().catch(()=>{});throw new Error('Respuesta HTTP supera 8 MiB');}
+        chunks.push(Buffer.from(value));
+      }
+    }
+    const responseHeaders={};
+    for(const [name,value] of response.headers.entries()){
+      if(name.toLowerCase()==='set-cookie')continue;
+      responseHeaders[name]=value;
+    }
+    return {
+      status:response.status,ok:response.ok,url:url.href,
+      text:Buffer.concat(chunks).toString('utf8'),
+      headers:responseHeaders
+    };
+  }
+  throw new Error('Demasiadas redirecciones HTTP');
+}
+
 async function scratchPowerFetch(rawUrl, method='GET', body='') {
   let url = await assertSafeScratchUrl(rawUrl);
   method = String(method || 'GET').toUpperCase();
@@ -374,6 +452,7 @@ ipcMain.handle('system:openExternal', async (_, rawUrl) => {
   if(error)throw new Error(error);
   return true;
 });
+ipcMain.handle('extensions:networkRequest', async (_, extensionId, request) => extensionNetworkRequest(extensionId,request));
 async function searchFiles(root, query, results = []) { if (!query || results.length >= 150) return results; for (const e of await fsp.readdir(root, { withFileTypes: true })) { if (results.length >= 150) break; if (['node_modules','.git','dist','out'].includes(e.name)) continue; const p = path.join(root,e.name); if (e.isDirectory()) await searchFiles(p,query,results); else { try { const s = await fsp.stat(p); if (s.size > 2_000_000) continue; const lines=(await fsp.readFile(p,'utf8')).split(/\r?\n/); lines.forEach((line,i)=>{ if(results.length<150 && line.toLowerCase().includes(query.toLowerCase())) results.push({path:p,line:i+1,text:line.trim().slice(0,180)}); }); } catch {} } } return results; }
 ipcMain.handle('workspace:search', async (_, root, query) => searchFiles(root, query));
 let materialIcons;
