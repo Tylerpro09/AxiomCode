@@ -209,6 +209,10 @@
     rows.sort((a,b)=>b.score-a.score||a.value.localeCompare(b.value));
     return rows.slice(0,limit);
   }
+  function topNested(map,key,prefix='',limit=8){
+    if(!map||!key)return [];
+    return topBucket(map.get(key),prefix,limit);
+  }
   function kindPatterns(language){
     const common=[
       ['class',/\b(?:class|interface|struct|enum|trait|type)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g],
@@ -370,11 +374,11 @@
           if(!old||score>old.score)scored.set(row.value,{value:row.value,score,source});
         }
       };
-      if(ctx.length>=3)add(topBucket(this.three,ctx.slice(-3).join('\u0000'),prefix,limit*3),80,'context-3');
-      if(ctx.length>=2)add(topBucket(this.two,ctx.slice(-2).join('\u0000'),prefix,limit*3),48,'context-2');
-      if(ctx.length>=1)add(topBucket(this.one,ctx[ctx.length-1],prefix,limit*3),26,'context-1');
+      if(ctx.length>=3)add(topNested(this.three,ctx.slice(-3).join('\u0000'),prefix,limit*3),80,'context-3');
+      if(ctx.length>=2)add(topNested(this.two,ctx.slice(-2).join('\u0000'),prefix,limit*3),48,'context-2');
+      if(ctx.length>=1)add(topNested(this.one,ctx[ctx.length-1],prefix,limit*3),26,'context-1');
       if(memberMode){
-        if(receiver)add(topBucket(this.memberByReceiver,receiver,prefix,limit*4),70,'member-receiver');
+        if(receiver)add(topNested(this.memberByReceiver,receiver,prefix,limit*4),70,'member-receiver');
         add(topFlat(this.memberAny,prefix,limit*4),38,'member');
       }
       add(topFlat(this.byLanguage.get(language)||new Map(),prefix,limit*4),18,'language-symbol');
@@ -403,7 +407,7 @@
       return rows.slice(0,limit);
     }
     suggestNextLine(previousLine,language,limit=3){
-      return topBucket(this.lineTransitions,language+'\u0000'+String(previousLine||'').trim().slice(-160),'',limit);
+      return topNested(this.lineTransitions,language+'\u0000'+String(previousLine||'').trim().slice(-160),'',limit);
     }
     compact(){
       const symbols=[...this.symbols.entries()].sort((a,b)=>b[1]-a[1]).slice(0,1800);
