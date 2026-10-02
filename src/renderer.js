@@ -5,6 +5,13 @@ const extensionRuntimes=new Map(), extensionCommands=new Map();
 const outputLog=[], debugLog=[], recentlyClosedEditors=[], navigationBack=[], navigationForward=[];
 let autoSaveTimer=null,explorerClipboard=null,explorerSelection=null,suppressNavigationHistory=false,livePreviewTimer=null,zenMode=false;
 let livePreviewState={id:null,url:null,entry:null,root:null,device:'desktop'};
+const workspaceProblemCache=new Map();
+let workspaceDiagnosticScanToken=0,workspaceDiagnosticTimer=null;
+let workspaceDiagnosticState={running:false,scanned:0,total:0,skipped:0};
+const PROJECT_DIAGNOSTIC_LANGUAGES=new Set(['javascript','typescript','json','html','css','scss','python','yaml','java','c','cpp','csharp','php','shell','powershell','go','rust','lua']);
+const PROJECT_DIAGNOSTIC_FILE_LIMIT=300;
+const PROJECT_DIAGNOSTIC_FILE_BYTES=512*1024;
+const PROJECT_DIAGNOSTIC_TOTAL_BYTES=12*1024*1024;
 async function ensureScratchAssetsLoaded(){
   if(scratchAssetsLoaded&&window.AxiomScratch)return true;
   if(!scratchInstalled)return false;
@@ -457,10 +464,10 @@ function renderTabs(){
     host.appendChild(el);
   });
 }
-async function openFile(p,line,column=1){if(/\.(axiomscratch|sb3|sb2|sb)$/i.test(p))return openScratchMode(p);try{if(!tabs.has(p)){const r=await window.axiom.readFile(p);tabs.set(p,{model:monaco.editor.createModel(r.content,fileLang(p),monaco.Uri.file(p)),dirty:false,pinned:false});}activate(p);if(line){const model=editor.getModel(),safeLine=Math.max(1,Math.min(model.getLineCount(),Number(line)||1)),safeColumn=Math.max(1,Math.min(model.getLineMaxColumn(safeLine),Number(column)||1));editor.revealPositionInCenter({lineNumber:safeLine,column:safeColumn});editor.setPosition({lineNumber:safeLine,column:safeColumn});}}catch(e){setStatus('No se pudo abrir: '+e.message);logOutput(e.message);}}
+async function openFile(p,line,column=1){if(/\.(axiomscratch|sb3|sb2|sb)$/i.test(p))return openScratchMode(p);try{workspaceProblemCache.delete(p);if(!tabs.has(p)){const r=await window.axiom.readFile(p);tabs.set(p,{model:monaco.editor.createModel(r.content,fileLang(p),monaco.Uri.file(p)),dirty:false,pinned:false});}activate(p);if(line){const model=editor.getModel(),safeLine=Math.max(1,Math.min(model.getLineCount(),Number(line)||1)),safeColumn=Math.max(1,Math.min(model.getLineMaxColumn(safeLine),Number(column)||1));editor.revealPositionInCenter({lineNumber:safeLine,column:safeColumn});editor.setPosition({lineNumber:safeLine,column:safeColumn});}}catch(e){setStatus('No se pudo abrir: '+e.message);logOutput(e.message);}}
 async function openFiles(){const paths=await window.axiom.openFiles(workspace?.root);for(const p of paths||[])await openFile(p);}
 function activate(p){window.AxiomScratch?.hide();const t=tabs.get(p);if(!t)return;rememberNavigation(p);activePath=p;editor.setModel(t.model);showCode(true);renderTabs();$('#language').textContent=fileLang(p);renderBreadcrumbs();editor.focus();setStatus(p);if(sideMode==='explorer')renderSideView();}
-function closeTab(p){const t=tabs.get(p);if(!t)return false;if(t.dirty&&!confirm(`Hay cambios sin guardar en ${basename(p)}. ¿Cerrar?`))return false;recentlyClosedEditors.push({path:p,pinned:Boolean(t.pinned)});if(recentlyClosedEditors.length>50)recentlyClosedEditors.shift();const wasActive=activePath===p;t.model.dispose();tabs.delete(p);if(wasActive){const next=[...tabs.keys()].pop()||null;activePath=null;if(next){suppressNavigationHistory=true;try{activate(next);}finally{suppressNavigationHistory=false;}}else{showCode(false);renderBreadcrumbs();}}renderTabs();return true;}
+function closeTab(p){const t=tabs.get(p);if(!t)return false;if(t.dirty&&!confirm(`Hay cambios sin guardar en ${basename(p)}. ¿Cerrar?`))return false;recentlyClosedEditors.push({path:p,pinned:Boolean(t.pinned)});if(recentlyClosedEditors.length>50)recentlyClosedEditors.shift();const wasActive=activePath===p;t.model.dispose();tabs.delete(p);workspaceProblemCache.delete(p);scheduleWorkspaceDiagnostics(220);if(wasActive){const next=[...tabs.keys()].pop()||null;activePath=null;if(next){suppressNavigationHistory=true;try{activate(next);}finally{suppressNavigationHistory=false;}}else{showCode(false);renderBreadcrumbs();}}renderTabs();return true;}
 async function saveActive(){if(window.AxiomScratch?.visible)return window.AxiomScratch.save();if(!activePath)return;const t=tabs.get(activePath);await window.axiom.writeFile(activePath,t.model.getValue());t.dirty=false;renderTabs();setStatus('Guardado '+basename(activePath));logOutput('Guardado '+activePath);if(activePath===window.AxiomPreferences?.state?.settingsPath)await window.AxiomPreferences.reloadFromDisk();}
 async function saveAll(){if(window.AxiomScratch?.visible)await window.AxiomScratch.save();for(const [p,t] of tabs){if(t.dirty){await window.axiom.writeFile(p,t.model.getValue());t.dirty=false;}}renderTabs();setStatus('Todos los archivos guardados');}
 async function createStarterProject(kind){
@@ -585,9 +592,9 @@ function toggleZenMode(force){
   setTimeout(()=>{editor?.layout();fitActiveTerminal();},60);
   return zenMode;
 }
-function useWorkspace(w,restored=false){if(!w)return;if(livePreviewState.id)closeLivePreview();workspace=w;$('#workspaceName').textContent=basename(w.root).toUpperCase();renderBreadcrumbs();sideMode='explorer';renderSideView();renderWelcomeRecents();setStatus((restored?'Proyecto restaurado: ':'Proyecto: ')+w.root);logOutput((restored?'Carpeta restaurada: ':'Carpeta abierta: ')+w.root);updateGit();window.AxiomPreferences?.onWorkspaceChanged();}
+function useWorkspace(w,restored=false){if(!w)return;if(livePreviewState.id)closeLivePreview();resetWorkspaceDiagnostics();workspace=w;$('#workspaceName').textContent=basename(w.root).toUpperCase();renderBreadcrumbs();sideMode='explorer';renderSideView();renderWelcomeRecents();setStatus((restored?'Proyecto restaurado: ':'Proyecto: ')+w.root);logOutput((restored?'Carpeta restaurada: ':'Carpeta abierta: ')+w.root);updateGit();window.AxiomPreferences?.onWorkspaceChanged();scheduleWorkspaceDiagnostics(180);}
 async function openWorkspace(){const w=await window.axiom.openWorkspace();if(w)useWorkspace(w,false);}
-async function refreshWorkspace(){if(!workspace)return;workspace=await window.axiom.refreshWorkspace(workspace.root);renderSideView();setStatus('Explorador actualizado');}
+async function refreshWorkspace(){if(!workspace)return;workspace=await window.axiom.refreshWorkspace(workspace.root);renderSideView();scheduleWorkspaceDiagnostics(180);setStatus('Explorador actualizado');}
 async function createNewFile(){if(!workspace)return setStatus('Primero abre una carpeta');const name=await askInput('Nombre del nuevo archivo:');if(!name)return;try{const p=join(workspace.root,name);await window.axiom.createFile(p,false);await refreshWorkspace();openFile(p);}catch(e){showInfo('Error',escapeHtml(e.message));}}
 async function createNewFolder(){if(!workspace)return setStatus('Primero abre una carpeta');const name=await askInput('Nombre de la nueva carpeta:');if(!name)return;try{await window.axiom.createFile(join(workspace.root,name),true);await refreshWorkspace();}catch(e){showInfo('Error',escapeHtml(e.message));}}
 function workspaceNode(target,nodes=workspace?.tree||[]){
@@ -1153,13 +1160,23 @@ async function languageWorkerDiagnostics(model){
   }
   return [];
 }
+function supplementaryDiagnostics(model){
+  const language=model.getLanguageId();
+  const markers=[];
+  if(language!=='javascript'&&language!=='typescript'&&language!=='json'&&language!=='html')markers.push(...structuralDiagnostics(model));
+  if(language==='html')markers.push(...htmlStructureDiagnostics(model));
+  return markers;
+}
+async function collectModelDiagnostics(model){
+  const workerMarkers=await languageWorkerDiagnostics(model);
+  return dedupeDiagnosticMarkers(workerMarkers.concat(supplementaryDiagnostics(model)));
+}
 async function refreshModelDiagnostics(model){
   if(!model||model.isDisposed&&model.isDisposed())return;
   const uri=model.uri.toString();
   try{
-    const workerMarkers=await languageWorkerDiagnostics(model);
+    const markers=await collectModelDiagnostics(model);
     if(model.isDisposed&&model.isDisposed())return;
-    const markers=dedupeDiagnosticMarkers(workerMarkers.concat(structuralDiagnostics(model),htmlStructureDiagnostics(model)));
     monaco.editor.setModelMarkers(model,AXIOM_DIAGNOSTIC_OWNER,markers);
   }catch(error){
     if(!(model.isDisposed&&model.isDisposed())){
@@ -1184,14 +1201,80 @@ function wireModelDiagnostics(model){
   if(model.onWillDispose)model.onWillDispose(()=>{const key=model.uri.toString();clearTimeout(diagnosticTimers.get(key));diagnosticTimers.delete(key);});
   scheduleModelDiagnostics(model,30);
 }
+function diagnosticPathSupported(path){
+  return PROJECT_DIAGNOSTIC_LANGUAGES.has(fileLang(path));
+}
+function resetWorkspaceDiagnostics(){
+  workspaceDiagnosticScanToken++;
+  clearTimeout(workspaceDiagnosticTimer);
+  workspaceDiagnosticTimer=null;
+  workspaceProblemCache.clear();
+  workspaceDiagnosticState={running:false,scanned:0,total:0,skipped:0};
+}
+function scheduleWorkspaceDiagnostics(delay=420){
+  if(!workspace||typeof monaco==='undefined')return;
+  clearTimeout(workspaceDiagnosticTimer);
+  workspaceDiagnosticTimer=setTimeout(()=>scanWorkspaceDiagnostics(),delay);
+}
+async function scanWorkspaceDiagnostics(){
+  if(!workspace||typeof monaco==='undefined')return;
+  const root=workspace.root,token=++workspaceDiagnosticScanToken;
+  const supported=filesOf(workspace.tree||[]).filter(f=>diagnosticPathSupported(f.path));
+  const candidates=supported.slice(0,PROJECT_DIAGNOSTIC_FILE_LIMIT);
+  const keep=new Set(candidates.map(f=>f.path));
+  for(const p of [...workspaceProblemCache.keys()])if(!keep.has(p)||tabs.has(p))workspaceProblemCache.delete(p);
+  workspaceDiagnosticState={running:true,scanned:0,total:supported.length,skipped:Math.max(0,supported.length-candidates.length)};
+  updateProblemBadge();
+  if(panelMode==='problems')renderPanelContent();
+  let cursor=0,totalBytes=0;
+  const worker=async()=>{
+    while(token===workspaceDiagnosticScanToken&&workspace?.root===root){
+      const index=cursor++;if(index>=candidates.length)return;
+      const path=candidates[index].path;
+      if(tabs.has(path)){workspaceProblemCache.delete(path);workspaceDiagnosticState.scanned++;continue;}
+      let model=null,owned=false;
+      try{
+        const uri=monaco.Uri.file(path);
+        model=monaco.editor.getModel(uri);
+        if(!model){
+          const read=await window.axiom.readFile(path);
+          if(token!==workspaceDiagnosticScanToken||workspace?.root!==root)return;
+          const content=String(read?.content??'');
+          if(content.length>PROJECT_DIAGNOSTIC_FILE_BYTES||totalBytes+content.length>PROJECT_DIAGNOSTIC_TOTAL_BYTES){workspaceProblemCache.delete(path);workspaceDiagnosticState.skipped++;workspaceDiagnosticState.scanned++;continue;}
+          totalBytes+=content.length;
+          model=monaco.editor.createModel(content,fileLang(path),uri);owned=true;
+        }
+        const markers=await collectModelDiagnostics(model);
+        if(token!==workspaceDiagnosticScanToken||workspace?.root!==root)return;
+        workspaceProblemCache.set(path,markers.map(m=>({...m,resource:uri,owner:AXIOM_DIAGNOSTIC_OWNER})));
+      }catch{
+        workspaceProblemCache.delete(path);
+        workspaceDiagnosticState.skipped++;
+      }finally{
+        if(owned&&model){try{model.dispose();}catch{}}
+        workspaceDiagnosticState.scanned++;
+      }
+    }
+  };
+  await Promise.all(Array.from({length:Math.min(4,candidates.length||1)},()=>worker()));
+  if(token!==workspaceDiagnosticScanToken||workspace?.root!==root)return;
+  workspaceDiagnosticState.running=false;
+  updateProblemBadge();
+  if(panelMode==='problems')renderPanelContent();
+}
 function currentProblemMarkers(){
   if(typeof monaco==='undefined')return [];
   const unique=new Map();
-  for(const m of monaco.editor.getModelMarkers({})||[]){
-    if(!m||!m.resource||!m.message)continue;
+  const add=m=>{
+    if(!m||!m.resource||!m.message)return;
     const key=[m.resource.toString(),m.startLineNumber,m.startColumn,m.endLineNumber,m.endColumn,m.message].join('|');
     const previous=unique.get(key);
     if(!previous||m.severity>previous.severity)unique.set(key,m);
+  };
+  for(const m of monaco.editor.getModelMarkers({})||[])add(m);
+  for(const [path,markers] of workspaceProblemCache){
+    if(tabs.has(path))continue;
+    for(const m of markers||[])add(m);
   }
   return [...unique.values()].sort((a,b)=>(b.severity-a.severity)||String(a.resource&&a.resource.fsPath||a.resource&&a.resource.path||'').localeCompare(String(b.resource&&b.resource.fsPath||b.resource&&b.resource.path||''))||(a.startLineNumber-b.startLineNumber)||(a.startColumn-b.startColumn));
 }
@@ -1200,14 +1283,16 @@ function updateProblemBadge(markers=currentProblemMarkers()){
   const errors=markers.filter(m=>m.severity>=monaco.MarkerSeverity.Error).length;
   const warnings=markers.filter(m=>m.severity===monaco.MarkerSeverity.Warning).length;
   tab.textContent=markers.length?`PROBLEMAS (${markers.length})`:'PROBLEMAS';
-  tab.title=markers.length?`${errors} error(es), ${warnings} advertencia(s)`:'Sin problemas detectados';
+  const scan=workspaceDiagnosticState.running?'Analizando proyecto… · ':'';
+  tab.title=scan+(markers.length?`${errors} error(es), ${warnings} advertencia(s)`:'Sin problemas detectados');
   tab.classList.toggle('has-errors',errors>0);
   tab.classList.toggle('has-warnings',errors===0&&warnings>0);
+  tab.classList.toggle('is-scanning',workspaceDiagnosticState.running);
 }
 function markerLocation(marker){
   const resource=marker?.resource;
   const filePath=resource?.fsPath||resource?.path||'';
-  return {filePath,label:basename(filePath||resource?.toString?.()||'archivo')};
+  return {filePath,label:filePath?relativeToWorkspace(filePath):basename(resource?.toString?.()||'archivo')};
 }
 function renderPanelContent(){
   const out=$('#terminalOutput'),host=$('#terminalHost'),row=$('.terminal-input-row'),actions=$('.terminal-actions');
@@ -1216,14 +1301,30 @@ function renderPanelContent(){
   if(panelMode==='output'){out.textContent=outputLog.join('\n')||'AxiomCode Output';return;}
   if(panelMode==='debug'){out.textContent=debugLog.join('\n')||'Consola de depuración lista.';return;}
   const markers=currentProblemMarkers();updateProblemBadge(markers);
-  if(!markers.length){out.innerHTML='<div class="empty-panel">No se detectaron problemas en los archivos abiertos.</div>';return;}
+  const errors=markers.filter(m=>m.severity>=monaco.MarkerSeverity.Error).length;
+  const warnings=markers.filter(m=>m.severity===monaco.MarkerSeverity.Warning).length;
+  if(workspaceDiagnosticState.running){
+    const note=document.createElement('div');note.className='view-note';
+    note.textContent=`Analizando proyecto… ${workspaceDiagnosticState.scanned}/${Math.min(workspaceDiagnosticState.total,PROJECT_DIAGNOSTIC_FILE_LIMIT)} archivos`;
+    out.appendChild(note);
+  }else if(workspace&&workspaceDiagnosticState.scanned){
+    const note=document.createElement('div');note.className='view-note';
+    note.textContent=`${errors} error(es) · ${warnings} advertencia(s) · ${workspaceDiagnosticState.scanned} archivo(s) verificados${workspaceDiagnosticState.skipped?' · '+workspaceDiagnosticState.skipped+' omitidos':''}`;
+    out.appendChild(note);
+  }
+  if(!markers.length){
+    const empty=document.createElement('div');empty.className='empty-panel';
+    empty.textContent=workspaceDiagnosticState.running?'Buscando problemas…':(workspace?'No se detectaron problemas en el proyecto ni en los archivos abiertos.':'No se detectaron problemas en los archivos abiertos.');
+    out.appendChild(empty);return;
+  }
   for(const m of markers){
     const {filePath,label}=markerLocation(m);
     const icon=m.severity>=monaco.MarkerSeverity.Error?'error':m.severity===monaco.MarkerSeverity.Warning?'warning':'info';
     const kind=m.severity>=monaco.MarkerSeverity.Error?'Error':m.severity===monaco.MarkerSeverity.Warning?'Advertencia':'Información';
-    const d=document.createElement('button');d.className='problem-row';
-    d.innerHTML=`<span class="codicon codicon-${icon}"></span><span><b>${escapeHtml(kind)}:</b> ${escapeHtml(m.message)}</span><small>${escapeHtml(label)}:${m.startLineNumber}:${m.startColumn}</small>`;
-    d.onclick=()=>filePath&&openFile(filePath,m.startLineNumber);
+    const source=[m.source,m.code].filter(Boolean).join(' ');
+    const d=document.createElement('button');d.className='problem-row';d.title=m.message;
+    d.innerHTML=`<span class="codicon codicon-${icon}"></span><span><b>${escapeHtml(kind)}:</b> ${escapeHtml(m.message)}</span><small>${escapeHtml(label)}:${m.startLineNumber}:${m.startColumn}${source?' · '+escapeHtml(source):''}</small>`;
+    d.onclick=()=>filePath&&openFile(filePath,m.startLineNumber,m.startColumn);
     out.appendChild(d);
   }
 }
@@ -1436,7 +1537,7 @@ async function setupSettings(){
   });
 }
 let externalChangeTimer;
-window.axiom.onWorkspaceFileChanged(change=>{if(!workspace||change.root!==workspace.root)return;clearTimeout(externalChangeTimer);externalChangeTimer=setTimeout(async()=>{try{workspace=await window.axiom.refreshWorkspace(workspace.root);if(sideMode==='explorer')renderSideView();const tab=tabs.get(change.path);if(tab&&!tab.dirty){const r=await window.axiom.readFile(change.path);if(r.content!==tab.model.getValue()){tab.model.setValue(r.content);tab.dirty=false;renderTabs();logOutput('Recargado por cambio externo: '+change.path);}}}catch{}},180);});
+window.axiom.onWorkspaceFileChanged(change=>{if(!workspace||change.root!==workspace.root)return;workspaceProblemCache.delete(change.path);clearTimeout(externalChangeTimer);externalChangeTimer=setTimeout(async()=>{try{workspace=await window.axiom.refreshWorkspace(workspace.root);if(sideMode==='explorer')renderSideView();const tab=tabs.get(change.path);if(tab&&!tab.dirty){const r=await window.axiom.readFile(change.path);if(r.content!==tab.model.getValue()){tab.model.setValue(r.content);tab.dirty=false;renderTabs();logOutput('Recargado por cambio externo: '+change.path);}}scheduleWorkspaceDiagnostics(220);}catch{}},180);});
 const iconsReady=window.axiom.getIconManifest().then(m=>{iconManifest=m;}).catch(()=>setStatus('Tema de iconos no disponible'));
 const monacoVsUrl=new URL('../node_modules/monaco-editor/min/vs',location.href).href.replace(/\/$/,'');
 require.config({paths:{vs:monacoVsUrl}});
