@@ -27,6 +27,7 @@
     "test:extension-network:smoke": "electron scripts/smoke-extension-network.cjs",
     "test:problems:smoke": "electron scripts/smoke-problems.cjs",
     "test:vscode-functions:smoke": "electron scripts/smoke-vscode-functions.cjs",
+    "test:workbench2:smoke": "electron scripts/smoke-workbench2.cjs",
     "test:destroyed-window:smoke": "electron scripts/smoke-destroyed-window.cjs",
     "test:scm:smoke": "electron scripts/smoke-scm.cjs",
     "test:live-preview:smoke": "electron scripts/smoke-live-preview.cjs"
