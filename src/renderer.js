@@ -12,6 +12,7 @@ const PROJECT_DIAGNOSTIC_LANGUAGES=new Set(['javascript','typescript','json','ht
 const PROJECT_DIAGNOSTIC_FILE_LIMIT=300;
 const PROJECT_DIAGNOSTIC_FILE_BYTES=512*1024;
 const PROJECT_DIAGNOSTIC_TOTAL_BYTES=12*1024*1024;
+const problemsViewState={filter:'',showErrors:true,showWarnings:true,showInfos:true,activeFile:false,collapsed:new Set()};
 async function ensureScratchAssetsLoaded(){
   if(scratchAssetsLoaded&&window.AxiomScratch)return true;
   if(!scratchInstalled)return false;
@@ -1030,12 +1031,15 @@ const AXIOM_DIAGNOSTIC_OWNER='axiom-problems';
 const diagnosticTimers=new Map();
 function flattenTsDiagnosticMessage(message){
   if(typeof message==='string')return message;
-  const parts=[];let node=message;
-  while(node){
+  const parts=[];
+  const visit=node=>{
+    if(!node)return;
+    if(typeof node==='string'){parts.push(node);return;}
     if(node.messageText)parts.push(String(node.messageText));
-    node=Array.isArray(node.next)?node.next[0]:null;
-  }
-  return parts.join(' ')||'Problema de TypeScript';
+    if(Array.isArray(node.next))for(const child of node.next)visit(child);
+  };
+  visit(message);
+  return [...new Set(parts.filter(Boolean))].join(' ')||'Problema de TypeScript';
 }
 function tsDiagnosticMarker(model,diag){
   const startOffset=Math.max(0,Number(diag.start)||0);
@@ -1058,13 +1062,15 @@ function lspDiagnosticMarker(diag,source='Language Service'){
   const start=range.start||{line:0,character:0},end=range.end||start;
   const sev=Number(diag&&diag.severity);
   const severity=sev===1?monaco.MarkerSeverity.Error:sev===2?monaco.MarkerSeverity.Warning:sev===4?monaco.MarkerSeverity.Hint:monaco.MarkerSeverity.Info;
+  const startLineNumber=Number(start.line||0)+1,startColumn=Number(start.character||0)+1;
+  const endLineNumber=Number(end.line||start.line||0)+1,rawEndColumn=Number(end.character??start.character??0)+1;
   return {
     severity,
     message:String(diag&&diag.message||'Problema detectado'),
     source:String(diag&&diag.source||source),
     code:diag&&diag.code!==undefined?String(diag.code):undefined,
-    startLineNumber:Number(start.line||0)+1,startColumn:Number(start.character||0)+1,
-    endLineNumber:Number(end.line||start.line||0)+1,endColumn:Number(end.character||start.character||0)+1
+    startLineNumber,startColumn,endLineNumber,
+    endColumn:endLineNumber===startLineNumber?Math.max(rawEndColumn,startColumn+1):Math.max(1,rawEndColumn)
   };
 }
 function structuralDiagnostics(model){
@@ -1113,17 +1119,26 @@ function htmlStructureDiagnostics(model){
   if(model.getLanguageId()!=='html')return [];
   const text=model.getValue(),markers=[],stack=[];
   const voidTags=new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
+  const sanitized=text
+    .replace(/<!--[\s\S]*?-->/g,m=>' '.repeat(m.length))
+    .replace(/(<\s*(script|style)\b[^>]*>)[\s\S]*?(<\s*\/\s*\2\s*>)/gi,(all,open,_tag,close)=>open+' '.repeat(Math.max(0,all.length-open.length-close.length))+close);
   const re=/<\s*(\/)?\s*([A-Za-z][A-Za-z0-9:-]*)([^>]*)>/g;
   let match;
-  while((match=re.exec(text))){
+  while((match=re.exec(sanitized))){
     const closing=Boolean(match[1]),tag=match[2].toLowerCase(),tail=match[3]||'';
     if(voidTags.has(tag)||/\/\s*$/.test(tail))continue;
     const pos=model.getPositionAt(match.index);
     if(!closing){stack.push({tag,pos});continue;}
-    const top=stack[stack.length-1];
-    if(!top||top.tag!==tag){
-      markers.push({severity:monaco.MarkerSeverity.Error,message:'Etiqueta de cierre </'+tag+'> no coincide con la apertura.',source:'Axiom HTML',startLineNumber:pos.lineNumber,startColumn:pos.column,endLineNumber:pos.lineNumber,endColumn:pos.column+match[0].length});
-    }else stack.pop();
+    const matchIndex=stack.map(x=>x.tag).lastIndexOf(tag);
+    if(matchIndex<0){
+      markers.push({severity:monaco.MarkerSeverity.Error,message:'Etiqueta de cierre </'+tag+'> sin apertura correspondiente.',source:'Axiom HTML',startLineNumber:pos.lineNumber,startColumn:pos.column,endLineNumber:pos.lineNumber,endColumn:pos.column+match[0].length});
+      continue;
+    }
+    for(let i=stack.length-1;i>matchIndex;i--){
+      const missing=stack.pop();
+      markers.push({severity:monaco.MarkerSeverity.Warning,message:'Falta cerrar <'+missing.tag+'> antes de </'+tag+'>.',source:'Axiom HTML',startLineNumber:missing.pos.lineNumber,startColumn:missing.pos.column,endLineNumber:missing.pos.lineNumber,endColumn:missing.pos.column+1});
+    }
+    stack.pop();
   }
   for(const item of stack.slice(-80))markers.push({severity:monaco.MarkerSeverity.Warning,message:'Falta cerrar <'+item.tag+'>.',source:'Axiom HTML',startLineNumber:item.pos.lineNumber,startColumn:item.pos.column,endLineNumber:item.pos.lineNumber,endColumn:item.pos.column+1});
   return markers;
@@ -1138,18 +1153,20 @@ function dedupeDiagnosticMarkers(markers){
   }
   return [...map.values()].slice(0,300);
 }
-async function languageWorkerDiagnostics(model){
+async function languageWorkerDiagnostics(model,background=false){
   const language=model.getLanguageId();
   if(language==='javascript'||language==='typescript'){
     const workerFactory=language==='typescript'?monaco.languages.typescript.getTypeScriptWorker:monaco.languages.typescript.getJavaScriptWorker;
     const getWorker=await workerFactory();
     const worker=await getWorker(model.uri);
     const uri=model.uri.toString();
-    const groups=await Promise.all([
-      worker.getSyntacticDiagnostics(uri).catch(()=>[]),
-      worker.getSemanticDiagnostics(uri).catch(()=>[]),
-      worker.getSuggestionDiagnostics(uri).catch(()=>[])
-    ]);
+    const groups=background
+      ?[await worker.getSyntacticDiagnostics(uri).catch(()=>[])]
+      :await Promise.all([
+        worker.getSyntacticDiagnostics(uri).catch(()=>[]),
+        worker.getSemanticDiagnostics(uri).catch(()=>[]),
+        worker.getSuggestionDiagnostics(uri).catch(()=>[])
+      ]);
     return groups.flat().map(diag=>tsDiagnosticMarker(model,diag));
   }
   if(language==='json'&&monaco.languages.json&&monaco.languages.json.getWorker){
@@ -1167,8 +1184,8 @@ function supplementaryDiagnostics(model){
   if(language==='html')markers.push(...htmlStructureDiagnostics(model));
   return markers;
 }
-async function collectModelDiagnostics(model){
-  const workerMarkers=await languageWorkerDiagnostics(model);
+async function collectModelDiagnostics(model,background=false){
+  const workerMarkers=await languageWorkerDiagnostics(model,background);
   return dedupeDiagnosticMarkers(workerMarkers.concat(supplementaryDiagnostics(model)));
 }
 async function refreshModelDiagnostics(model){
@@ -1195,14 +1212,16 @@ function scheduleModelDiagnostics(model,delay=280){
   diagnosticTimers.set(key,setTimeout(()=>refreshModelDiagnostics(model),delay));
 }
 function wireModelDiagnostics(model){
-  if(!model||model.__axiomDiagnosticsWired)return;
+  if(!model||model.__axiomDiagnosticsWired||model.uri?.scheme&&model.uri.scheme!=='file')return;
   model.__axiomDiagnosticsWired=true;
   model.onDidChangeContent(()=>scheduleModelDiagnostics(model));
   if(model.onWillDispose)model.onWillDispose(()=>{const key=model.uri.toString();clearTimeout(diagnosticTimers.get(key));diagnosticTimers.delete(key);});
   scheduleModelDiagnostics(model,30);
 }
 function diagnosticPathSupported(path){
-  return PROJECT_DIAGNOSTIC_LANGUAGES.has(fileLang(path));
+  if(!PROJECT_DIAGNOSTIC_LANGUAGES.has(fileLang(path)))return false;
+  const rel='/'+normalizeSlash(relativeToWorkspace(path)).toLowerCase().replace(/^\/+|\/+$/g,'')+'/';
+  return !/\/(?:node_modules|\.git|dist|out|build|coverage|\.next|vendor|target|bin|obj)\//.test(rel);
 }
 function resetWorkspaceDiagnostics(){
   workspaceDiagnosticScanToken++;
@@ -1244,7 +1263,7 @@ async function scanWorkspaceDiagnostics(){
           totalBytes+=content.length;
           model=monaco.editor.createModel(content,fileLang(path),uri);owned=true;
         }
-        const markers=await collectModelDiagnostics(model);
+        const markers=await collectModelDiagnostics(model,true);
         if(token!==workspaceDiagnosticScanToken||workspace?.root!==root)return;
         workspaceProblemCache.set(path,markers.map(m=>({...m,resource:uri,owner:AXIOM_DIAGNOSTIC_OWNER})));
       }catch{
@@ -1266,7 +1285,7 @@ function currentProblemMarkers(){
   if(typeof monaco==='undefined')return [];
   const unique=new Map();
   const add=m=>{
-    if(!m||!m.resource||!m.message)return;
+    if(!m||!m.resource||!m.message||m.resource.scheme&&m.resource.scheme!=='file')return;
     const key=[m.resource.toString(),m.startLineNumber,m.startColumn,m.endLineNumber,m.endColumn,m.message].join('|');
     const previous=unique.get(key);
     if(!previous||m.severity>previous.severity)unique.set(key,m);
@@ -1294,39 +1313,101 @@ function markerLocation(marker){
   const filePath=resource?.fsPath||resource?.path||'';
   return {filePath,label:filePath?relativeToWorkspace(filePath):basename(resource?.toString?.()||'archivo')};
 }
+function problemSeverity(marker){
+  if(marker.severity>=monaco.MarkerSeverity.Error)return 'error';
+  if(marker.severity===monaco.MarkerSeverity.Warning)return 'warning';
+  return 'info';
+}
+function filteredProblemMarkers(markers=currentProblemMarkers()){
+  const query=problemsViewState.filter.trim().toLowerCase();
+  const active=normalizeSlash(activePath||'').toLowerCase();
+  return markers.filter(marker=>{
+    const kind=problemSeverity(marker);
+    if(kind==='error'&&!problemsViewState.showErrors)return false;
+    if(kind==='warning'&&!problemsViewState.showWarnings)return false;
+    if(kind==='info'&&!problemsViewState.showInfos)return false;
+    const {filePath,label}=markerLocation(marker);
+    if(problemsViewState.activeFile&&(!active||normalizeSlash(filePath).toLowerCase()!==active))return false;
+    if(!query)return true;
+    const code=typeof marker.code==='object'?marker.code?.value:marker.code;
+    return [marker.message,marker.source,code,label].filter(Boolean).some(x=>String(x).toLowerCase().includes(query));
+  });
+}
+function groupProblemMarkers(markers){
+  const map=new Map();
+  for(const marker of markers){
+    const loc=markerLocation(marker),key=loc.filePath||marker.resource?.toString?.()||loc.label;
+    let group=map.get(key);
+    if(!group){group={key,filePath:loc.filePath,label:loc.label,markers:[]};map.set(key,group);}
+    group.markers.push(marker);
+  }
+  return [...map.values()].sort((a,b)=>{
+    const sa=Math.max(...a.markers.map(m=>m.severity)),sb=Math.max(...b.markers.map(m=>m.severity));
+    return (sb-sa)||a.label.localeCompare(b.label);
+  });
+}
+function updateProblemsToolbar(all,filtered){
+  const actions=$('#problemsActions');if(actions)actions.style.display=panelMode==='problems'?'flex':'none';
+  const counts={error:0,warning:0,info:0};
+  for(const m of all)counts[problemSeverity(m)]++;
+  const map={error:'#problemErrorCount',warning:'#problemWarningCount',info:'#problemInfoCount'};
+  for(const [kind,selector] of Object.entries(map)){const el=$(selector);if(el)el.textContent=String(counts[kind]);}
+  $('#problemErrors')?.classList.toggle('active',problemsViewState.showErrors);
+  $('#problemWarnings')?.classList.toggle('active',problemsViewState.showWarnings);
+  $('#problemInfos')?.classList.toggle('active',problemsViewState.showInfos);
+  $('#problemsActiveFile')?.classList.toggle('active',problemsViewState.activeFile);
+  const filter=$('#problemsFilter');if(filter&&document.activeElement!==filter&&filter.value!==problemsViewState.filter)filter.value=problemsViewState.filter;
+  const badge=$('#problemsFilterBadge');if(badge)badge.textContent=filtered.length===all.length?'':filtered.length+'/'+all.length;
+}
+async function openProblemMarker(marker,quickFix=false){
+  const {filePath}=markerLocation(marker);if(!filePath)return;
+  await openFile(filePath,marker.startLineNumber,marker.startColumn);
+  const model=editor?.getModel();if(!model)return;
+  const safeEndLine=Math.max(marker.startLineNumber,Math.min(model.getLineCount(),Number(marker.endLineNumber)||marker.startLineNumber));
+  const safeEndColumn=Math.max(1,Math.min(model.getLineMaxColumn(safeEndLine),Number(marker.endColumn)||marker.startColumn+1));
+  editor.setSelection(new monaco.Selection(marker.startLineNumber,marker.startColumn,safeEndLine,safeEndColumn));
+  editor.revealRangeInCenter(editor.getSelection());
+  if(quickFix)setTimeout(()=>runEditorAction('editor.action.quickFix'),20);
+}
+function renderProblemsPanel(out){
+  const all=currentProblemMarkers(),markers=filteredProblemMarkers(all);updateProblemBadge(all);updateProblemsToolbar(all,markers);
+  const errors=all.filter(m=>problemSeverity(m)==='error').length,warnings=all.filter(m=>problemSeverity(m)==='warning').length;
+  const summary=document.createElement('div');summary.className='problems-summary';
+  const progress=workspaceDiagnosticState.running?` · Analizando ${workspaceDiagnosticState.scanned}/${Math.min(workspaceDiagnosticState.total,PROJECT_DIAGNOSTIC_FILE_LIMIT)}`:'';
+  const filtered=markers.length!==all.length?` · Mostrando ${markers.length} de ${all.length}`:'';
+  summary.textContent=`${errors} error(es) · ${warnings} advertencia(s)${filtered}${progress}`;
+  out.appendChild(summary);
+  if(!markers.length){
+    const empty=document.createElement('div');empty.className='empty-panel';
+    empty.textContent=all.length?'No hay problemas que coincidan con los filtros.':(workspaceDiagnosticState.running?'Buscando problemas…':(workspace?'No se detectaron problemas en el proyecto.':'No se detectaron problemas en los archivos abiertos.'));
+    out.appendChild(empty);return;
+  }
+  for(const group of groupProblemMarkers(markers)){
+    const collapsed=problemsViewState.collapsed.has(group.key);
+    const header=document.createElement('button');header.className='problem-resource';header.title=group.label;
+    const groupErrors=group.markers.filter(m=>problemSeverity(m)==='error').length;
+    const groupWarnings=group.markers.filter(m=>problemSeverity(m)==='warning').length;
+    header.innerHTML=`<span class="codicon codicon-chevron-${collapsed?'right':'down'}"></span><span class="problem-resource-icon">${iconHtml(fileIconId(basename(group.filePath||group.label)))}</span><span class="problem-resource-name">${escapeHtml(basename(group.filePath||group.label))}</span><span class="problem-resource-path">${escapeHtml(dirname(group.label)||'.')}</span><span class="problem-resource-count">${group.markers.length}${groupErrors?' · '+groupErrors+'E':''}${groupWarnings?' · '+groupWarnings+'W':''}</span>`;
+    header.onclick=()=>{if(collapsed)problemsViewState.collapsed.delete(group.key);else problemsViewState.collapsed.add(group.key);renderPanelContent();};
+    out.appendChild(header);
+    if(collapsed)continue;
+    for(const marker of group.markers){
+      const kind=problemSeverity(marker),source=[marker.source,typeof marker.code==='object'?marker.code?.value:marker.code].filter(Boolean).join(' ');
+      const row=document.createElement('button');row.className='problem-row '+kind;row.title=marker.message+'\nDoble clic: acciones rápidas';
+      row.innerHTML=`<span class="codicon codicon-${kind}"></span><span class="problem-copy"><span class="problem-message">${escapeHtml(marker.message)}</span><span class="problem-source">${escapeHtml(source)}</span></span><small>[${marker.startLineNumber}, ${marker.startColumn}]</small>`;
+      row.onclick=()=>openProblemMarker(marker,false);
+      row.ondblclick=e=>{e.preventDefault();openProblemMarker(marker,true);};
+      out.appendChild(row);
+    }
+  }
+}
 function renderPanelContent(){
-  const out=$('#terminalOutput'),host=$('#terminalHost'),row=$('.terminal-input-row'),actions=$('.terminal-actions');
-  out.innerHTML='';host.style.display=panelMode==='terminal'?'block':'none';out.style.display=panelMode==='terminal'?'none':'block';row.style.display='none';actions.style.visibility=panelMode==='terminal'?'visible':'hidden';
+  const out=$('#terminalOutput'),host=$('#terminalHost'),row=$('.terminal-input-row'),actions=$('.terminal-actions'),problemActions=$('#problemsActions');
+  out.innerHTML='';out.classList.toggle('problems-output',panelMode==='problems');host.style.display=panelMode==='terminal'?'block':'none';out.style.display=panelMode==='terminal'?'none':'block';row.style.display='none';actions.style.display=panelMode==='terminal'?'flex':'none';if(problemActions)problemActions.style.display=panelMode==='problems'?'flex':'none';
   if(panelMode==='terminal'){renderActiveTerminal();return;}
   if(panelMode==='output'){out.textContent=outputLog.join('\n')||'AxiomCode Output';return;}
   if(panelMode==='debug'){out.textContent=debugLog.join('\n')||'Consola de depuración lista.';return;}
-  const markers=currentProblemMarkers();updateProblemBadge(markers);
-  const errors=markers.filter(m=>m.severity>=monaco.MarkerSeverity.Error).length;
-  const warnings=markers.filter(m=>m.severity===monaco.MarkerSeverity.Warning).length;
-  if(workspaceDiagnosticState.running){
-    const note=document.createElement('div');note.className='view-note';
-    note.textContent=`Analizando proyecto… ${workspaceDiagnosticState.scanned}/${Math.min(workspaceDiagnosticState.total,PROJECT_DIAGNOSTIC_FILE_LIMIT)} archivos`;
-    out.appendChild(note);
-  }else if(workspace&&workspaceDiagnosticState.scanned){
-    const note=document.createElement('div');note.className='view-note';
-    note.textContent=`${errors} error(es) · ${warnings} advertencia(s) · ${workspaceDiagnosticState.scanned} archivo(s) verificados${workspaceDiagnosticState.skipped?' · '+workspaceDiagnosticState.skipped+' omitidos':''}`;
-    out.appendChild(note);
-  }
-  if(!markers.length){
-    const empty=document.createElement('div');empty.className='empty-panel';
-    empty.textContent=workspaceDiagnosticState.running?'Buscando problemas…':(workspace?'No se detectaron problemas en el proyecto ni en los archivos abiertos.':'No se detectaron problemas en los archivos abiertos.');
-    out.appendChild(empty);return;
-  }
-  for(const m of markers){
-    const {filePath,label}=markerLocation(m);
-    const icon=m.severity>=monaco.MarkerSeverity.Error?'error':m.severity===monaco.MarkerSeverity.Warning?'warning':'info';
-    const kind=m.severity>=monaco.MarkerSeverity.Error?'Error':m.severity===monaco.MarkerSeverity.Warning?'Advertencia':'Información';
-    const source=[m.source,m.code].filter(Boolean).join(' ');
-    const d=document.createElement('button');d.className='problem-row';d.title=m.message;
-    d.innerHTML=`<span class="codicon codicon-${icon}"></span><span><b>${escapeHtml(kind)}:</b> ${escapeHtml(m.message)}</span><small>${escapeHtml(label)}:${m.startLineNumber}:${m.startColumn}${source?' · '+escapeHtml(source):''}</small>`;
-    d.onclick=()=>filePath&&openFile(filePath,m.startLineNumber,m.startColumn);
-    out.appendChild(d);
-  }
+  renderProblemsPanel(out);
 }
 async function newTerminal(shell=$('#terminalShell')?.value||window.AxiomPreferences?.getSetting('terminal.defaultProfile')||'powershell'){const info=await window.axiom.createTerminal(shell,workspace?.root),session={...info,buffer:'',history:[],historyPos:0,term:null,fit:null,node:null};if(info.pty&&globalThis.Terminal&&globalThis.FitAddon?.FitAddon){const node=document.createElement('div');node.className='xterm-session';node.dataset.id=info.id;$('#terminalHost').appendChild(node);const term=new Terminal({cursorBlink:true,fontFamily:'Cascadia Code, Consolas, monospace',fontSize:Number(window.AxiomPreferences?.getSetting('terminal.fontSize'))||13,lineHeight:1.2,scrollback:Number(window.AxiomPreferences?.getSetting('terminal.scrollback'))||5000,theme:{background:'#181818',foreground:'#CCCCCC',cursor:'#AEAFAD',selectionBackground:'#264F78'}}),fit=new FitAddon.FitAddon();term.loadAddon(fit);term.open(node);term.onData(data=>window.axiom.writeTerminal(info.id,data));session.term=term;session.fit=fit;session.node=node;}terminalState.sessions.set(info.id,session);terminalState.active=info.id;renderTerminalTabs();setPanelMode('terminal');fitActiveTerminal();}
 function renderTerminalTabs(){const host=$('#terminalTabs');host.innerHTML='';terminalState.sessions.forEach((t,id)=>{const b=document.createElement('button');b.className='terminal-tab'+(id===terminalState.active?' active':'');b.textContent=(t.shell==='cmd'?'CMD':'PowerShell')+' '+id.split('-').pop();b.onclick=()=>{terminalState.active=id;renderTerminalTabs();renderActiveTerminal();};host.appendChild(b);});}
@@ -1485,7 +1566,7 @@ help:[['Buscar actualizaciones...',()=>checkForAppUpdates(true)],['Acerca de Axi
 function closeMenus(){document.querySelector('.app-menu')?.remove();$$('.menubar button').forEach(b=>b.classList.remove('menu-open'));}
 function showMenu(button,key){closeMenus();const m=document.createElement('div');m.className='app-menu';for(const [label,action] of menuModel[key]||[]){const b=document.createElement('button');b.textContent=label;b.onclick=()=>{closeMenus();action();};m.appendChild(b);}const r=button.getBoundingClientRect();m.style.left=r.left+'px';m.style.top=r.bottom+'px';document.body.appendChild(m);button.classList.add('menu-open');setTimeout(()=>document.addEventListener('pointerdown',e=>{if(!m.contains(e.target)&&e.target!==button)closeMenus();},{once:true}),0);}
 function wireMenus(){$$('.menubar [data-menu]').forEach(b=>b.onclick=e=>{e.stopPropagation();if(b.classList.contains('menu-open'))closeMenus();else showMenu(b,b.dataset.menu);});}
-function wireUI(){$$('[data-starter]').forEach(b=>b.onclick=()=>createStarterProject(b.dataset.starter));$('#updateBtn').onclick=()=>appUpdate?.available?installAppUpdate():checkForAppUpdates(true);$('#previewBtn').onclick=toggleLivePreview;$('#zenBtn').onclick=()=>toggleZenMode();$("#scratchBtn").onclick=()=>openScratchMode();$('#openBtn').onclick=openWorkspace;$('#saveBtn').onclick=saveActive;$('#refreshBtn').onclick=refreshWorkspace;$('#newFileBtn').onclick=createNewFile;$('#newFolderBtn').onclick=createNewFolder;$('#commandBtn').onclick=()=>showPalette('unified');$('#welcomeCommand').onclick=()=>showPalette('commands');$('#explorerBtn').onclick=()=>setSideMode('explorer');$('#searchBtn').onclick=()=>setSideMode('search');$('#gitBtn').onclick=()=>setSideMode('scm');$('#runBtn').onclick=()=>setSideMode('run');$('#outlineBtn').onclick=()=>setSideMode('outline');$('#pulseBtn').onclick=()=>setSideMode('pulse');$('#extensionsBtn').onclick=()=>setSideMode('extensions');$('#accountsBtn').onclick=()=>showInfo('Cuentas','<p>AxiomCode funciona actualmente en modo local. La sincronización de cuentas se añadirá como módulo.</p>');$('#terminalBtn').onclick=()=>{setPanelMode('terminal');if(!terminalState.sessions.size)newTerminal();};$('#closePanel').onclick=()=>togglePanel(false);$('#newTerminal').onclick=()=>newTerminal();$('#killTerminal').onclick=closeActiveTerminal;$('#problemsTab').onclick=()=>setPanelMode('problems');$('#outputTab').onclick=()=>setPanelMode('output');$('#debugTab').onclick=()=>setPanelMode('debug');$('#terminalTab').onclick=()=>setPanelMode('terminal');$('#previewRefresh').onclick=refreshLivePreviewFrame;$('#previewClose').onclick=closeLivePreview;$('#previewExternal').onclick=async()=>{if(livePreviewState.id)try{await window.axiom.openLivePreviewExternal(livePreviewState.id);}catch(e){setStatus('Preview: '+e.message);}};$$('[data-preview-device]').forEach(b=>b.onclick=()=>setPreviewDevice(b.dataset.previewDevice));wireMenus();
+function wireUI(){$$('[data-starter]').forEach(b=>b.onclick=()=>createStarterProject(b.dataset.starter));$('#updateBtn').onclick=()=>appUpdate?.available?installAppUpdate():checkForAppUpdates(true);$('#previewBtn').onclick=toggleLivePreview;$('#zenBtn').onclick=()=>toggleZenMode();$("#scratchBtn").onclick=()=>openScratchMode();$('#openBtn').onclick=openWorkspace;$('#saveBtn').onclick=saveActive;$('#refreshBtn').onclick=refreshWorkspace;$('#newFileBtn').onclick=createNewFile;$('#newFolderBtn').onclick=createNewFolder;$('#commandBtn').onclick=()=>showPalette('unified');$('#welcomeCommand').onclick=()=>showPalette('commands');$('#explorerBtn').onclick=()=>setSideMode('explorer');$('#searchBtn').onclick=()=>setSideMode('search');$('#gitBtn').onclick=()=>setSideMode('scm');$('#runBtn').onclick=()=>setSideMode('run');$('#outlineBtn').onclick=()=>setSideMode('outline');$('#pulseBtn').onclick=()=>setSideMode('pulse');$('#extensionsBtn').onclick=()=>setSideMode('extensions');$('#accountsBtn').onclick=()=>showInfo('Cuentas','<p>AxiomCode funciona actualmente en modo local. La sincronización de cuentas se añadirá como módulo.</p>');$('#terminalBtn').onclick=()=>{setPanelMode('terminal');if(!terminalState.sessions.size)newTerminal();};$('#closePanel').onclick=()=>togglePanel(false);$('#newTerminal').onclick=()=>newTerminal();$('#killTerminal').onclick=closeActiveTerminal;$('#problemsTab').onclick=()=>setPanelMode('problems');$('#problemsFilter').oninput=e=>{problemsViewState.filter=e.target.value;renderPanelContent();};$('#problemErrors').onclick=()=>{problemsViewState.showErrors=!problemsViewState.showErrors;renderPanelContent();};$('#problemWarnings').onclick=()=>{problemsViewState.showWarnings=!problemsViewState.showWarnings;renderPanelContent();};$('#problemInfos').onclick=()=>{problemsViewState.showInfos=!problemsViewState.showInfos;renderPanelContent();};$('#problemsActiveFile').onclick=()=>{problemsViewState.activeFile=!problemsViewState.activeFile;renderPanelContent();};$('#problemsCollapse').onclick=()=>{for(const g of groupProblemMarkers(filteredProblemMarkers()))problemsViewState.collapsed.add(g.key);renderPanelContent();};$('#problemsRefresh').onclick=()=>{workspaceProblemCache.clear();scheduleWorkspaceDiagnostics(0);for(const model of monaco.editor.getModels())scheduleModelDiagnostics(model,0);renderPanelContent();};$('#outputTab').onclick=()=>setPanelMode('output');$('#debugTab').onclick=()=>setPanelMode('debug');$('#terminalTab').onclick=()=>setPanelMode('terminal');$('#previewRefresh').onclick=refreshLivePreviewFrame;$('#previewClose').onclick=closeLivePreview;$('#previewExternal').onclick=async()=>{if(livePreviewState.id)try{await window.axiom.openLivePreviewExternal(livePreviewState.id);}catch(e){setStatus('Preview: '+e.message);}};$$('[data-preview-device]').forEach(b=>b.onclick=()=>setPreviewDevice(b.dataset.previewDevice));wireMenus();
 $('#terminalInput').addEventListener('keydown',e=>{const t=terminalState.sessions.get(terminalState.active);if(e.key==='Enter')execPersistentTerminal(e.target.value);else if(e.key==='ArrowUp'&&t){e.preventDefault();if(t.historyPos>0)e.target.value=t.history[--t.historyPos]||'';}else if(e.key==='ArrowDown'&&t){e.preventDefault();if(t.historyPos<t.history.length-1)e.target.value=t.history[++t.historyPos]||'';else{t.historyPos=t.history.length;e.target.value='';}}});
 $('#paletteInput').oninput=e=>buildPalette(e.target.value);$('#overlay').onclick=e=>{if(e.target===$('#overlay'))hidePalette();};$('#paletteInput').onkeydown=e=>{if(e.key==='Escape')hidePalette();if(e.key==='Enter'&&paletteItems[0]){hidePalette();paletteItems[0].run();}};}
 function runPreferenceCommand(id){
