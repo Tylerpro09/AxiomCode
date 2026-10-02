@@ -1153,26 +1153,36 @@ function dedupeDiagnosticMarkers(markers){
   }
   return [...map.values()].slice(0,300);
 }
+async function retryDiagnosticCall(call,retries=2){
+  let error;
+  for(let attempt=0;attempt<=retries;attempt++){
+    try{return await call();}
+    catch(e){error=e;if(attempt<retries)await new Promise(resolve=>setTimeout(resolve,45*(attempt+1)));}
+  }
+  if(error)throw error;
+  return [];
+}
 async function languageWorkerDiagnostics(model,background=false){
   const language=model.getLanguageId();
   if(language==='javascript'||language==='typescript'){
     const workerFactory=language==='typescript'?monaco.languages.typescript.getTypeScriptWorker:monaco.languages.typescript.getJavaScriptWorker;
-    const getWorker=await workerFactory();
-    const worker=await getWorker(model.uri);
+    const getWorker=await retryDiagnosticCall(()=>workerFactory());
+    const worker=await retryDiagnosticCall(()=>getWorker(model.uri));
     const uri=model.uri.toString();
+    const syntactic=()=>retryDiagnosticCall(()=>worker.getSyntacticDiagnostics(uri));
     const groups=background
-      ?[await worker.getSyntacticDiagnostics(uri).catch(()=>[])]
+      ?[await syntactic()]
       :await Promise.all([
-        worker.getSyntacticDiagnostics(uri).catch(()=>[]),
-        worker.getSemanticDiagnostics(uri).catch(()=>[]),
-        worker.getSuggestionDiagnostics(uri).catch(()=>[])
+        syntactic(),
+        retryDiagnosticCall(()=>worker.getSemanticDiagnostics(uri)),
+        retryDiagnosticCall(()=>worker.getSuggestionDiagnostics(uri))
       ]);
     return groups.flat().map(diag=>tsDiagnosticMarker(model,diag));
   }
   if(language==='json'&&monaco.languages.json&&monaco.languages.json.getWorker){
-    const getWorker=await monaco.languages.json.getWorker();
-    const worker=await getWorker(model.uri);
-    const rows=await worker.doValidation(model.uri.toString());
+    const getWorker=await retryDiagnosticCall(()=>monaco.languages.json.getWorker());
+    const worker=await retryDiagnosticCall(()=>getWorker(model.uri));
+    const rows=await retryDiagnosticCall(()=>worker.doValidation(model.uri.toString()));
     return (rows||[]).map(diag=>lspDiagnosticMarker(diag,'JSON'));
   }
   return [];
